@@ -14,6 +14,7 @@ public class NexusClient : MonoBehaviour
 {
     [Tooltip("Ex.: https://seusite.com")] public string baseUrl = "http://localhost:3000";
     [Tooltip("Chave do jogo em Painel → Integração · API")] public string apiKey = "";
+    [Tooltip("Segredo de assinatura HMAC (opcional; obrigatório se o painel exigir assinatura). Prefira usar em servidor próprio.")] public string signingSecret = "";
 
     [Serializable] public class OrderItem { public string sku; public string name; public string type; public int qty; public int unit_cents; public int coins; }
     [Serializable] public class Order { public string code; public string status; public int total_cents; public int coins_total; public string external_player_id; public OrderItem[] items; }
@@ -29,7 +30,19 @@ public class NexusClient : MonoBehaviour
     IEnumerator Send(string method, string path, object body, Action<string> ok, Action<string> fail = null)
     {
         var req = new UnityWebRequest(baseUrl.TrimEnd('/') + "/api/v1" + path, method);
-        if (body != null) req.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(JsonUtility.ToJson(body)));
+        string json = body != null ? JsonUtility.ToJson(body) : "";
+        if (body != null) req.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(json));
+        if (!string.IsNullOrEmpty(signingSecret))
+        {
+            // X-Nexus-Signature = HMAC-SHA256(segredo, "timestamp.MÉTODO./api/v1/caminho.corpo")
+            string ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+            using (var h = new System.Security.Cryptography.HMACSHA256(Encoding.UTF8.GetBytes(signingSecret)))
+            {
+                var mac = h.ComputeHash(Encoding.UTF8.GetBytes($"{ts}.{method}./api/v1{path}.{json}"));
+                req.SetRequestHeader("X-Nexus-Timestamp", ts);
+                req.SetRequestHeader("X-Nexus-Signature", BitConverter.ToString(mac).Replace("-", "").ToLowerInvariant());
+            }
+        }
         req.downloadHandler = new DownloadHandlerBuffer();
         req.SetRequestHeader("Authorization", "Bearer " + apiKey);
         req.SetRequestHeader("Content-Type", "application/json");

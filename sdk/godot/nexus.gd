@@ -4,6 +4,8 @@ extends Node
 
 var base_url := "http://localhost:3000"
 var api_key := ""
+## Segredo de assinatura HMAC (opcional; obrigatório se o painel exigir assinatura).
+var signing_secret := ""
 
 func _platform() -> String:
 	match OS.get_name():
@@ -17,6 +19,13 @@ func _send(method: int, path: String, body = null):
 	add_child(http)
 	var headers := ["Authorization: Bearer " + api_key, "Content-Type: application/json"]
 	var data := "" if body == null else JSON.stringify(body)
+	if signing_secret != "":
+		var ts := str(int(Time.get_unix_time_from_system()))
+		var method_name: String = ["GET", "HEAD", "POST", "PUT", "DELETE"][method] if method <= 4 else "POST"
+		var msg := "%s.%s./api/v1%s.%s" % [ts, method_name, path, data]
+		var mac := Crypto.new().hmac_digest(HashingContext.HASH_SHA256, signing_secret.to_utf8_buffer(), msg.to_utf8_buffer())
+		headers.append("X-Nexus-Timestamp: " + ts)
+		headers.append("X-Nexus-Signature: " + mac.hex_encode())
 	var err := http.request(base_url.trim_suffix("/") + "/api/v1" + path, headers, method, data)
 	if err != OK:
 		http.queue_free()

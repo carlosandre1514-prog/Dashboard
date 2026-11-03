@@ -8,6 +8,7 @@
   "scripts": {
     "start": "node server/server.js",
     "dev": "node --watch server/server.js",
-    "seed": "node server/seed.js"
+    "seed": "node server/seed.js",
+    "test": "node --test tests/*.test.js"
   }
 }

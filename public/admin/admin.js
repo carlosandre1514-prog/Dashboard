@@ -24,9 +24,12 @@ const F = {
 const L = {
   type: { currency: 'Moeda', skin: 'Skin', item: 'Item', pass: 'Passe', bundle: 'Pacote' },
   typeIcon: { currency: 'coin', skin: 'skin', item: 'item', pass: 'pass', bundle: 'bundle' },
-  status: { pending: 'Aguardando pagamento', paid: 'Pago · a entregar', delivered: 'Entregue', refunded: 'Estornado', canceled: 'Cancelado' },
+  status: { pending: 'Aguardando pagamento', paid: 'Pago · a entregar', delivered: 'Entregue', refunded: 'Estornado', canceled: 'Cancelado', expired: 'Expirado' },
+  verif: { provider: 'Verificado no banco', manual: 'Conferido manualmente', game_signed: 'Loja do jogo · assinado', game_reported: 'Informado pelo jogo', webhook: 'Webhook assinado', none: 'Não verificado' },
+  verifIcon: { provider: 'shield', manual: 'check', game_signed: 'shield', game_reported: 'info', webhook: 'check', none: 'alert' },
   gstatus: { live: 'Publicado', beta: 'Beta', dev: 'Em desenvolvimento', paused: 'Pausado' },
   pay: { pix: 'Pix', card: 'Cartão', google_play: 'Google Play', app_store: 'App Store', steam: 'Steam', store: 'Loja do jogo', other: 'Outro' },
+  provider: { mercadopago: 'Mercado Pago', manual_pix: 'Pix manual', store: 'Loja da plataforma', admin: 'Registro manual' },
   plat: { web: 'Web', pc: 'PC', android: 'Android', ios: 'iOS', console: 'Console' },
   channel: { site: 'Site', in_game: 'No jogo' },
   event: { download: 'Download', install: 'Instalação', session_start: 'Sessão iniciada', signup: 'Novo cadastro', page_view: 'Acesso ao site' },
@@ -36,10 +39,10 @@ const HEX = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '
 
 // ============================================================ API
 async function api(method, url, body) {
-  const r = await fetch(url, { method, credentials: 'same-origin', headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+  const r = await fetch(url, { method, credentials: 'same-origin', headers: { 'X-Requested-With': 'nexus', ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) {
-    if (r.status === 401 && state.me) { state.me = null; boot(); }
+    if (r.status === 401 && state.me && !url.startsWith('/api/auth')) { state.me = null; toast('Sessão encerrada por inatividade. Entre novamente.', 'err'); boot(); }
     throw new Error(data.error || `Erro ${r.status}`);
   }
   return data;
@@ -120,6 +123,48 @@ function confirmDialog(title, text, action = 'Confirmar') {
     $$('#layer [data-x]').forEach(b => b.addEventListener('click', () => res(false)));
   });
 }
+// Confirmação forte para ações sensíveis: reautenticação no Firebase (senha ou Google) + 2FA se ativo.
+function stepUpDialog({ title, text, action = 'Confirmar', danger = false, fields = '', run }) {
+  const layer = $('#layer');
+  layer.innerHTML = `<div class="overlay"><form class="dialog" style="max-width:480px" novalidate>
+    <div class="dialog-h"><span style="color:var(--warning);display:flex">${icon('lock', 18)}</span><h3>${esc(title)}</h3><button type="button" class="btn ghost icon sm x" data-x>${icon('close', 16)}</button></div>
+    <div class="dialog-b" style="display:flex;flex-direction:column;gap:14px">
+      ${text ? `<p class="t2" style="font-size:13.5px">${esc(text)}</p>` : ''}${fields}
+      <div class="stepup"><span class="label">Confirme sua identidade</span>
+        <label class="field"><span>Senha da conta ${esc(state.me.email)}</span><input class="input" type="password" name="password" autocomplete="current-password"></label>
+        <button type="button" class="btn sm" data-google>${icon('globe', 14)}Entrei com Google — confirmar com Google</button>
+        ${state.me.totp_enabled ? '<label class="field"><span>Código do app autenticador</span><input class="input mono" name="totp" inputmode="numeric" maxlength="6" autocomplete="one-time-code" style="letter-spacing:.25em"></label>' : ''}
+      </div>
+      <div class="nxl-msg err" id="suErr"></div>
+    </div>
+    <div class="dialog-f"><button type="button" class="btn" data-x>Cancelar</button><button class="btn ${danger ? 'danger' : 'primary'}" type="submit">${esc(action)}</button></div>
+  </form></div>`;
+  const form = $('form', layer);
+  $$('[data-x]', layer).forEach(b => b.onclick = closeLayer);
+  const go = async useGoogle => {
+    const d = formData(form);
+    $$('button', form).forEach(b => b.disabled = true);
+    try {
+      const A = await NXWhenAuth();
+      if (!useGoogle && !d.password) throw new Error('Digite sua senha ou use o Google');
+      const id_token = await A.freshToken(useGoogle ? { useGoogle: true } : { email: state.me.email, password: d.password });
+      await run({ id_token, totp: d.totp }, d);
+      if ($('form', layer) === form) closeLayer();
+    } catch (e) { $('#suErr').textContent = window.NXAuth ? NXAuth.message(e) : e.message; $$('button', form).forEach(b => b.disabled = false); }
+  };
+  form.onsubmit = e => { e.preventDefault(); go(false); };
+  $('[data-google]', form).onclick = () => go(true);
+  setTimeout(() => $('input', form)?.focus(), 30);
+}
+function showSecretOnce(title, secret) {
+  const layer = $('#layer');
+  layer.innerHTML = `<div class="overlay"><div class="dialog" style="max-width:520px"><div class="dialog-h"><h3>${esc(title)}</h3></div>
+    <div class="dialog-b" style="display:flex;flex-direction:column;gap:12px"><p class="t2" style="font-size:13px">Copie agora — por segurança ele não será exibido de novo.</p>
+    <div class="keybox"><code id="once">${esc(secret)}</code><button class="btn sm ghost icon" id="onceCopy">${icon('copy', 15)}</button></div></div>
+    <div class="dialog-f"><button class="btn primary" data-x>Já copiei</button></div></div></div>`;
+  $('#onceCopy').onclick = () => copy(secret);
+  $$('[data-x]', layer).forEach(b => b.onclick = () => { closeLayer(); route(); });
+}
 async function copy(text) {
   try { await navigator.clipboard.writeText(text); toast('Copiado para a área de transferência', 'ok'); }
   catch { toast('Não foi possível copiar', 'err'); }
@@ -195,6 +240,7 @@ const NAV = [
   ['Operação', [
     ['comando', 'Centro de comando', 'command'],
     ['vendas', 'Vendas & receita', 'revenue'],
+    ['pagamentos', 'Pagamentos', 'shield'],
     ['audiencia', 'Audiência', 'audience'],
     ['live', 'Ao vivo', 'pulse'],
   ]],
@@ -208,6 +254,7 @@ const NAV = [
   ]],
   ['Sistema', [
     ['integracao', 'Integração · API', 'plug'],
+    ['seguranca', 'Segurança', 'lock'],
     ['config', 'Configurações', 'sliders'],
   ]],
 ];
@@ -216,7 +263,7 @@ const PAGE_TITLE = Object.fromEntries(NAV.flatMap(([, items]) => items.map(([k, 
 function renderNav() {
   const cur = currentRoute();
   $('#nav').innerHTML = NAV.map(([g, items]) => `<div class="rail-group"><span class="label">${g}</span>
-    ${items.map(([k, t, ic]) => `<a class="rail-link ${cur === k ? 'on' : ''}" href="#/${k}" title="${t}">${icon(ic, 18)}<span>${t}</span>${k === 'pedidos' ? '<em class="badge hidden" id="pendBadge"></em>' : ''}</a>`).join('')}
+    ${items.map(([k, t, ic]) => `<a class="rail-link ${cur === k ? 'on' : ''}" href="#/${k}" title="${t}">${icon(ic, 18)}<span>${t}</span>${k === 'pedidos' ? '<em class="badge hidden" id="pendBadge"></em>' : k === 'pagamentos' ? '<em class="badge hidden" id="reviewBadge"></em>' : ''}</a>`).join('')}
   </div>`).join('');
   $('#crumbs').innerHTML = `<span>NEXUS</span>${icon('chevronRight', 14)}<b>${PAGE_TITLE[cur] || ''}</b>`;
 }
@@ -238,6 +285,8 @@ async function refreshPendingBadge() {
     const d = await api('GET', '/api/admin/orders?status=paid&size=1');
     const b = $('#pendBadge'); if (!b) return;
     b.textContent = d.total; b.classList.toggle('hidden', !d.total); b.title = 'Pedidos pagos aguardando entrega';
+    const rv = await api('GET', '/api/admin/orders?review=1&size=1');
+    const rb = $('#reviewBadge'); if (rb) { rb.textContent = rv.total; rb.classList.toggle('hidden', !rv.total); rb.title = 'Pedidos retidos para análise'; }
   } catch { }
 }
 async function loadGames() { state.games = await api('GET', '/api/admin/games'); }
@@ -388,6 +437,7 @@ PAGES.vendas = async (page) => {
   body.innerHTML = `
     <div class="strip">
       <div><span class="label">Receita líquida</span><b>${F.money(net.revenue)}</b></div>
+      <div><span class="label">Verificada no banco/loja</span><b>${F.money(k.verified_revenue)}</b></div>
       <div><span class="label">vs. período anterior</span><b>${delta(net.revenue, netP.revenue)}</b></div>
       ${per.map((x, i) => `<div><span class="label">${esc(scope[i].name)} · ${esc(scope[i].currency_name)}</span><b>${F.int(x.kpis.coins)}</b></div>`).join('')}
     </div>
@@ -400,6 +450,8 @@ PAGES.vendas = async (page) => {
       ${panel('s4', '05', 'Forma de pagamento', '', '', '<div id="vPay"></div>')}
       ${panel('s4', '06', 'Status dos pedidos', 'todos os pedidos do período', '', '<div id="vStatus"></div>')}
       ${panel('s12', '07', 'Ranking de produtos', '', '', '<div class="table-wrap" id="vProducts"></div>', 'flush')}
+      ${panel('s8', '08', 'Quem mais comprou', 'compradores do período', `<a class="btn sm ghost" href="#/jogadores" id="allBuyers">Todos ${icon('chevronRight', 14)}</a>`, '<div class="table-wrap" id="vBuyers"></div>', 'flush')}
+      ${panel('s4', '09', 'Como a receita foi verificada', '', '', '<div id="vVerif"></div>')}
     </div>`;
   const bk = bucket(s.days, per.map(x => x.series.revenue));
   C.line($('#vRevGames'), { labels: bk.labels, series: scope.map((g, i) => ({ name: g.name, values: bk.arrays[i], color: gameColor(g.id) })), fmt: F.money, fmtY: v => 'R$' + C.compact(v / 100), fmtX: F.day, fmtTitle: F.dayLong, height: 280, area: scope.length === 1 });
@@ -408,8 +460,16 @@ PAGES.vendas = async (page) => {
   C.donut($('#vType'), { segments: b.byType.map((x, i) => ({ label: L.type[x.key] || x.key, value: x.revenue, color: SERIES[i] })), fmt: F.money, centerValue: F.moneyK(k.revenue) });
   C.donut($('#vPlat'), { segments: b.byPlatform.map((x, i) => ({ label: L.plat[x.key] || x.key, value: x.revenue, color: SERIES[i] })), fmt: F.money, centerValue: F.moneyK(k.revenue) });
   C.bars($('#vPay'), { rows: b.byPayment.map(x => ({ label: L.pay[x.key] || x.key, sub: F.int(x.orders) + ' pedidos', value: x.revenue })), fmt: F.money });
-  const stOrder = ['delivered', 'paid', 'pending', 'refunded', 'canceled'];
-  const stColor = { delivered: 'var(--good)', paid: 'var(--accent)', pending: 'var(--warning)', refunded: 'var(--serious)', canceled: 'var(--critical)' };
+  $('#vBuyers').innerHTML = b.topBuyers.length ? `<table class="table"><thead><tr><th>#</th><th>Jogador</th><th class="r">Compras</th><th class="r">Moedas</th><th>Última</th><th class="r">Total gasto</th></tr></thead><tbody>
+    ${b.topBuyers.map((x, i) => `<tr class="row-link" data-pid="${x.id}"><td class="muted mono">${String(i + 1).padStart(2, '0')}</td><td><div class="cell-main"><span class="pi">${icon('user', 15)}</span><div><b>${esc(x.username)}</b><small>${esc(x.email || 'conta do jogo')}</small></div></div></td>
+      <td class="r">${F.int(x.orders)}</td><td class="r">${F.int(x.coins)}</td><td class="t2">há ${F.ago(x.last)}</td><td class="r"><b style="font-weight:600">${F.money(x.spent)}</b></td></tr>`).join('')}</tbody></table>`
+    : emptyBox('players', 'Sem compradores', 'Nenhuma compra paga no período.');
+  $$('#vBuyers [data-pid]').forEach(tr => tr.onclick = () => playerDrawer(Number(tr.dataset.pid)));
+  $('#allBuyers').onclick = () => { state.players = { q: '', page: 1, sort: 'spent' }; };
+  const vColor = { provider: 'var(--good)', game_signed: 'var(--series-3)', manual: 'var(--accent)', webhook: 'var(--series-7)', game_reported: 'var(--warning)', none: 'var(--muted)' };
+  C.bars($('#vVerif'), { rows: b.byVerification.map(x => ({ label: L.verif[x.key] || x.key, sub: F.int(x.orders) + ' pedidos', value: x.revenue, color: vColor[x.key] })), fmt: F.money });
+  const stOrder = ['delivered', 'paid', 'pending', 'refunded', 'canceled', 'expired'];
+  const stColor = { delivered: 'var(--good)', paid: 'var(--accent)', pending: 'var(--warning)', refunded: 'var(--serious)', canceled: 'var(--critical)', expired: 'var(--muted)' };
   C.bars($('#vStatus'), { rows: stOrder.map(st => b.byStatus.find(x => x.key === st)).filter(Boolean).map(x => ({ label: L.status[x.key], sub: F.money(x.revenue), value: x.orders, color: stColor[x.key] })), fmt: F.int });
   const maxRev = Math.max(1, ...b.byProduct.map(x => x.revenue));
   const totalRev = b.byProduct.reduce((a, x) => a + x.revenue, 0) || 1;
@@ -424,7 +484,7 @@ PAGES.vendas = async (page) => {
 
 // ---------------------------------------------------------------- Audiência
 PAGES.audiencia = async (page) => {
-  page.innerHTML = pageHead('03 · OPERAÇÃO', 'Audiência', 'Acessos ao site, downloads, cadastros e jogadores ativos em cada jogo.');
+  page.innerHTML = pageHead('04 · OPERAÇÃO', 'Audiência', 'Acessos ao site, downloads, cadastros e jogadores ativos em cada jogo.');
   page.appendChild(filterBar(() => PAGES.audiencia(page)));
   const body = document.createElement('div'); body.className = 'loading'; page.appendChild(body);
   const { from, to } = rangeDates();
@@ -477,7 +537,7 @@ PAGES.audiencia = async (page) => {
 // ---------------------------------------------------------------- Ao vivo
 const live = { buckets: [], counts: { order: 0, download: 0, signup: 0, session_start: 0, revenue: 0 } };
 PAGES.live = async (page) => {
-  page.innerHTML = pageHead('04 · OPERAÇÃO', 'Ao vivo', 'Eventos chegando dos jogos e do site, em tempo real.') + `
+  page.innerHTML = pageHead('05 · OPERAÇÃO', 'Ao vivo', 'Eventos chegando dos jogos e do site, em tempo real.') + `
     <div class="kpis">
       ${[['order', 'Vendas nesta sessão', 'receipt'], ['revenue', 'Receita nesta sessão', 'revenue'], ['session_start', 'Sessões iniciadas', 'play'], ['download', 'Downloads', 'download']].map(([k, l, ic]) =>
         `<section class="panel kpi"><div class="k-top">${icon(ic, 15)}<span class="label">${l}</span></div><div class="k-val" id="lv_${k}">${k === 'revenue' ? F.money(live.counts[k]) : F.int(live.counts[k])}</div><div class="k-bot"><span class="muted" style="font-size:11.5px">desde que você abriu o painel</span></div></section>`).join('')}
@@ -515,7 +575,7 @@ function drawLive() {
 // ---------------------------------------------------------------- Jogos
 PAGES.jogos = async (page) => {
   await loadGames();
-  page.innerHTML = pageHead('05 · CATÁLOGO', 'Jogos', 'Seus jogos publicados no site, com página de download e loja própria.',
+  page.innerHTML = pageHead('06 · CATÁLOGO', 'Jogos', 'Seus jogos publicados no site, com página de download e loja própria.',
     `<button class="btn primary" id="newGame">${icon('plus', 16)}Novo jogo</button>`) +
     (state.games.length ? `<div class="games">${state.games.map(g => `
       <section class="panel game-card">
@@ -536,8 +596,9 @@ PAGES.jogos = async (page) => {
           </div>
         </div>
       </section>`).join('')}</div>`
-      : `<section class="panel">${emptyBox('gamepad', 'Nenhum jogo ainda', 'Cadastre seu primeiro jogo. Ele ganha uma página pública com download e loja, e uma chave de API para integrar as compras.', `<button class="btn primary" onclick="gameForm()">${icon('plus', 16)}Novo jogo</button>`)}</section>`);
+      : `<section class="panel">${emptyBox('gamepad', 'Nenhum jogo ainda', 'Cadastre seu primeiro jogo. Ele ganha uma página pública com download e loja, e uma chave de API para integrar as compras.', `<button class="btn primary" id="newGame2">${icon('plus', 16)}Novo jogo</button>`)}</section>`);
   $('#newGame').onclick = () => gameForm();
+  if ($('#newGame2')) $('#newGame2').onclick = () => gameForm();
   $$('[data-edit]', page).forEach(b => b.onclick = () => gameForm(state.games.find(g => g.id === Number(b.dataset.edit))));
   $$('[data-prod]', page).forEach(a => a.onclick = () => { state.products.game = a.dataset.prod; });
   $$('[data-int]', page).forEach(a => a.onclick = () => { state.intGame = a.dataset.int; });
@@ -570,9 +631,8 @@ function gameForm(g = {}) {
   });
   const del = $('#delGame');
   if (del) del.onclick = async () => {
-    if (!(await confirmDialog('Excluir jogo', `Excluir "${g.name}" apaga também produtos, pedidos e telemetria dele. Isso não pode ser desfeito.`, 'Excluir definitivamente'))) return;
-    await api('DELETE', '/api/admin/games/' + g.id);
-    toast('Jogo excluído', 'ok'); await loadGames(); route();
+    stepUpDialog({ title: 'Excluir jogo', text: `Excluir "${g.name}" apaga também produtos, pedidos e telemetria dele. Isso não pode ser desfeito.`, action: 'Excluir definitivamente', danger: true,
+      run: async ex => { await api('DELETE', '/api/admin/games/' + g.id, ex); toast('Jogo excluído', 'ok'); await loadGames(); route(); } });
   };
 }
 
@@ -583,7 +643,7 @@ PAGES.produtos = async (page) => {
   let rows = list;
   if (f.type) rows = rows.filter(p => p.type === f.type);
   if (f.q) rows = rows.filter(p => (p.name + ' ' + p.sku).toLowerCase().includes(f.q.toLowerCase()));
-  page.innerHTML = pageHead('06 · CATÁLOGO', 'Produtos', 'Pacotes de moedas, skins, itens e passes vendidos no site e dentro dos jogos.',
+  page.innerHTML = pageHead('07 · CATÁLOGO', 'Produtos', 'Pacotes de moedas, skins, itens e passes vendidos no site e dentro dos jogos.',
     state.games.length ? `<button class="btn primary" id="newProd">${icon('plus', 16)}Novo produto</button>` : '') + `
     <div class="filters">
       <select class="select" id="pGame">${gameOptions(f.game)}</select>
@@ -657,23 +717,23 @@ PAGES.pedidos = async (page) => {
   const qs = new URLSearchParams({ status: f.status, game: f.game, channel: f.channel, q: f.q, page: f.page, size: 25 });
   const d = await api('GET', '/api/admin/orders?' + qs);
   const pages = Math.max(1, Math.ceil(d.total / d.size));
-  page.innerHTML = pageHead('07 · CLIENTES', 'Pedidos', 'Todas as compras — feitas no site ou dentro dos jogos.',
+  page.innerHTML = pageHead('08 · CLIENTES', 'Pedidos', 'Todas as compras — feitas no site ou dentro dos jogos.',
     `<a class="btn" href="/api/admin/export/orders.csv?${new URLSearchParams({ status: f.status, game: f.game, channel: f.channel, q: f.q })}">${icon('download', 15)}CSV</a><button class="btn primary" id="newOrder">${icon('plus', 16)}Venda manual</button>`) + `
     <div class="filters">
-      <div class="seg" id="oStatus"><button data-v="" class="${!f.status ? 'on' : ''}">Todos</button>${['pending', 'paid', 'delivered', 'refunded', 'canceled'].map(k => `<button data-v="${k}" class="${f.status === k ? 'on' : ''}"><span class="status ${k}"></span>${{ pending: 'Aguardando', paid: 'A entregar', delivered: 'Entregues', refunded: 'Estornados', canceled: 'Cancelados' }[k]}</button>`).join('')}</div>
+      <div class="seg" id="oStatus"><button data-v="" class="${!f.status ? 'on' : ''}">Todos</button>${['pending', 'paid', 'delivered', 'refunded', 'canceled', 'expired'].map(k => `<button data-v="${k}" class="${f.status === k ? 'on' : ''}"><span class="status ${k}"></span>${{ pending: 'Aguardando', paid: 'A entregar', delivered: 'Entregues', refunded: 'Estornados', canceled: 'Cancelados', expired: 'Expirados' }[k]}</button>`).join('')}</div>
       <select class="select" id="oGame">${gameOptions(f.game)}</select>
       <select class="select" id="oChannel" style="min-width:140px"><option value="">Todos os canais</option>${Object.entries(L.channel).map(([k, v]) => `<option value="${k}" ${f.channel === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
       <div class="input-group">${icon('search', 15)}<input class="input" id="oQ" placeholder="Código, jogador ou ID no jogo" value="${esc(f.q)}"></div>
     </div>
     <section class="panel"><div class="panel-b flush"><div class="table-wrap">
-      ${d.rows.length ? `<table class="table"><thead><tr><th>Pedido</th><th>Data</th><th>Jogo</th><th>Jogador</th><th>Canal</th><th>Pagamento</th><th class="r">Moedas</th><th class="r">Total</th><th>Status</th></tr></thead><tbody>
+      ${d.rows.length ? `<table class="table"><thead><tr><th>Pedido</th><th>Data</th><th>Jogo</th><th>Jogador</th><th>Canal</th><th>Pagamento</th><th>Verificação</th><th class="r">Total</th><th>Status</th></tr></thead><tbody>
         ${d.rows.map(o => `<tr class="row-link" data-code="${esc(o.code)}">
           <td class="code">${esc(o.code)}</td><td class="t2 mono" style="font-size:12px">${F.dt(o.created_at)}</td>
           <td><span style="display:inline-flex;align-items:center;gap:8px"><span class="viz-key rect" style="background:${gameColor(o.game_id)}"></span>${esc(o.game_name)}</span></td>
           <td>${esc(o.username || o.customer_name || '—')}${o.external_player_id ? `<small class="muted mono" style="display:block;font-size:11px">ID ${esc(o.external_player_id)}</small>` : ''}</td>
           <td class="t2">${L.channel[o.channel]}<small class="muted" style="display:block;font-size:11px">${L.plat[o.platform] || o.platform}</small></td>
-          <td class="t2">${L.pay[o.payment_method] || o.payment_method}</td>
-          <td class="r">${o.coins_total ? F.int(o.coins_total) : '<span class="muted">—</span>'}</td>
+          <td class="t2">${L.pay[o.payment_method] || o.payment_method}${o.payer_name ? `<small class="muted" style="display:block;font-size:11px">${esc(o.payer_name)}</small>` : ''}</td>
+          <td>${vbadge(o)}</td>
           <td class="r"><b style="font-weight:600">${F.money(o.total_cents)}</b></td>
           <td><span class="status ${o.status}">${L.status[o.status]}</span></td></tr>`).join('')}
       </tbody></table>` : emptyBox('receipt', 'Nenhum pedido', 'Nenhum pedido encontrado com esses filtros.')}
@@ -694,41 +754,76 @@ PAGES.pedidos = async (page) => {
 };
 async function orderDrawer(code) {
   const o = await api('GET', '/api/admin/orders/' + encodeURIComponent(code));
-  const steps = [['Pedido criado', o.created_at, true], ['Pagamento confirmado', o.paid_at, !!o.paid_at], ['Itens entregues no jogo', o.delivered_at, !!o.delivered_at]];
-  const actions = {
-    pending: [['paid', 'Confirmar pagamento', 'primary'], ['canceled', 'Cancelar', 'danger']],
-    paid: [['delivered', 'Marcar como entregue', 'primary'], ['refunded', 'Estornar', 'danger']],
-    delivered: [['refunded', 'Estornar', 'danger']],
-    refunded: [], canceled: [['pending', 'Reabrir', '']],
-  }[o.status];
+  const held = o.review && ['pending', 'paid'].includes(o.status);
+  const acts = [];
+  if (o.provider === 'mercadopago' && ['pending', 'paid'].includes(o.status)) acts.push(['verify', 'Consultar no banco', '']);
+  if (o.status === 'pending' && o.provider !== 'mercadopago') acts.push(['confirm', 'Confirmar pagamento', 'primary']);
+  if (o.status === 'pending') acts.push(['cancel', 'Cancelar', 'danger']);
+  if (held && o.status === 'paid') acts.push(['approve', 'Liberar após análise', 'primary']);
+  if (o.status === 'paid' && !held) acts.push(['deliver', 'Marcar como entregue', '']);
+  if (['paid', 'delivered'].includes(o.status)) acts.push(['refund', 'Estornar', 'danger']);
+  const pst = o.player_stats;
   const dr = drawer(`
     <div class="dialog-h"><div><span class="label">Pedido</span><h3 class="mono" style="margin-top:4px">${esc(o.code)}</h3></div><button class="btn ghost icon sm x" data-x>${icon('close', 16)}</button></div>
     <div class="dialog-b" style="flex:1">
-      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px"><b style="font-size:26px;font-weight:600">${F.money(o.total_cents)}</b><span class="status ${o.status}">${L.status[o.status]}</span></div>
-      <div class="section-t"><span class="label">Linha do tempo</span></div>
-      <ul class="timeline">${steps.map(([l, at, done]) => `<li class="${done ? 'done' : ''}"><span class="dot"></span><span>${l}</span><span>${at ? F.dt(at) : '—'}</span></li>`).join('')}</ul>
+      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap"><b style="font-size:26px;font-weight:600">${F.money(o.total_cents)}</b><span class="status ${o.status}">${L.status[o.status]}</span></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">${vbadge(o)}${riskBar(o.risk_score)}</div>
+      ${held ? `<div class="banner" style="margin-top:14px;border-color:rgba(208,59,59,.5);background:rgba(208,59,59,.08);color:#ffb0b0">${icon('alert', 18)}<span><b>Retido para análise.</b> O jogo não recebe este pedido até você liberar.</span></div>` : ''}
+      ${o.risk_flags.length ? `<div class="section-t"><span class="label">Sinais de risco</span></div><ul class="flags">${o.risk_flags.map(f => `<li><span class="mono">+${f.points}</span>${esc(f.text)}</li>`).join('')}</ul>` : ''}
+      <div class="section-t"><span class="label">Comprador</span></div>
+      <dl class="kv">
+        <dt>Conta</dt><dd>${o.player_id ? `<a href="#" data-player="${o.player_id}" style="color:var(--accent)">${esc(o.username || '—')}</a>` : esc(o.customer_name || '—')}${o.email ? `<span class="muted"> · ${esc(o.email)}</span>` : ''}</dd>
+        ${pst ? `<dt>Histórico</dt><dd>${F.int(pst.orders)} pedidos · ${F.money(pst.spent)} gastos${pst.refunds ? ` · <span style="color:#f07a7a">${pst.refunds} estorno(s)</span>` : ''}</dd>` : ''}
+        <dt>ID no jogo</dt><dd class="mono">${esc(o.external_player_id || '—')}</dd>
+        <dt>Jogo · canal</dt><dd>${esc(o.game_name)} · ${L.channel[o.channel]} · ${L.plat[o.platform] || esc(o.platform)}</dd>
+        <dt>IP do pedido</dt><dd class="mono">${esc(o.ip || '—')}</dd>
+      </dl>
+      <div class="section-t"><span class="label">Pagamento</span></div>
+      <dl class="kv">
+        <dt>Método</dt><dd>${L.pay[o.payment_method] || esc(o.payment_method)} · ${L.provider[o.provider] || esc(o.provider || '—')}</dd>
+        <dt>Valor esperado</dt><dd>${F.money(o.total_cents)}</dd>
+        <dt>Valor recebido</dt><dd>${o.paid_amount_cents == null ? '<span class="muted">—</span>' : o.paid_amount_cents === o.total_cents ? `${F.money(o.paid_amount_cents)} <span class="vbadge provider">${icon('check', 11)}confere</span>` : `<b style="color:#f07a7a">${F.money(o.paid_amount_cents)} — divergente</b>`}</dd>
+        ${o.net_amount_cents != null ? `<dt>Líquido (após taxas)</dt><dd>${F.money(o.net_amount_cents)}</dd>` : ''}
+        <dt>Pagador</dt><dd>${esc(o.payer_name || '—')}${o.payer_doc ? ` <span class="mono muted">${esc(o.payer_doc)}</span>` : ''}${o.payer_email ? `<span class="muted"> · ${esc(o.payer_email)}</span>` : ''}</dd>
+        ${o.provider_payment_id ? `<dt>ID no provedor</dt><dd class="mono">${esc(o.provider_payment_id)} <span class="muted">(${esc(o.provider_status || '')})</span></dd>` : ''}
+        ${o.e2e_id ? `<dt>Pix E2E</dt><dd class="mono">${esc(o.e2e_id)}</dd>` : ''}
+        ${o.external_ref ? `<dt>Recibo da loja</dt><dd class="mono">${esc(o.external_ref)}</dd>` : ''}
+        ${o.verified_at ? `<dt>Verificado em</dt><dd>${F.dt(o.verified_at)}${o.verified_by_name ? ' por ' + esc(o.verified_by_name) : ''}</dd>` : ''}
+      </dl>
       <div class="section-t"><span class="label">Itens</span></div>
       <table class="table"><tbody>${o.items.map(i => `<tr><td style="padding-left:0"><div class="cell-main"><span class="pi ${i.type}">${icon(L.typeIcon[i.type], 16)}</span><div><b>${i.qty}× ${esc(i.name)}</b><small>${esc(i.sku)}${i.coins ? ' · ' + F.int(i.coins * i.qty) + ' moedas' : ''}</small></div></div></td><td class="r" style="padding-right:0">${F.money(i.unit_cents * i.qty)}</td></tr>`).join('')}</tbody></table>
-      <div class="section-t"><span class="label">Detalhes</span></div>
-      <dl class="kv">
-        <dt>Jogo</dt><dd>${esc(o.game_name)}</dd>
-        <dt>Jogador</dt><dd>${esc(o.username || o.customer_name || '—')}${o.email ? `<span class="muted"> · ${esc(o.email)}</span>` : ''}</dd>
-        <dt>ID no jogo</dt><dd class="mono">${esc(o.external_player_id || '—')}</dd>
-        <dt>Canal</dt><dd>${L.channel[o.channel]} · ${L.plat[o.platform] || o.platform}</dd>
-        <dt>Pagamento</dt><dd>${L.pay[o.payment_method] || o.payment_method}</dd>
-        ${o.external_ref ? `<dt>Transação externa</dt><dd class="mono">${esc(o.external_ref)}</dd>` : ''}
-        <dt>Moedas</dt><dd>${F.int(o.coins_total)}</dd>
-        ${o.note ? `<dt>Observação</dt><dd>${esc(o.note)}</dd>` : ''}
-      </dl>
-      ${o.status === 'paid' ? `<p class="muted" style="margin-top:18px;font-size:12.5px;display:flex;gap:8px">${icon('info', 16)}O jogo entrega automaticamente quando consulta <code>/api/v1/deliveries</code>. Marque como entregue só se entregou manualmente.</p>` : ''}
+      <div class="section-t"><span class="label">Histórico do pedido</span></div>
+      <ul class="evlog">${o.events.map(e => `<li class="${e.kind}"><span class="dot"></span><div><b>${esc(e.message)}</b><small>${F.dt(e.at)} · ${esc(e.actor || 'sistema')}</small></div></li>`).join('') || '<li><div class="muted">Sem eventos.</div></li>'}</ul>
     </div>
-    <div class="dialog-f">${actions.map(([st, l, c]) => `<button class="btn ${c}" data-st="${st}">${l}</button>`).join('')}</div>`);
-  $$('[data-st]', dr).forEach(b => b.onclick = async () => {
-    if (['refunded', 'canceled'].includes(b.dataset.st) && !(await confirmDialog(b.textContent, `Confirmar "${b.textContent.toLowerCase()}" para o pedido ${o.code}? O estoque é devolvido.`))) return orderDrawer(code);
-    try { await api('PATCH', '/api/admin/orders/' + encodeURIComponent(code), { status: b.dataset.st }); toast(`Pedido ${code}: ${L.status[b.dataset.st]}`, 'ok'); closeLayer(); route(); }
-    catch (e) { toast(e.message, 'err'); }
+    <div class="dialog-f">${acts.map(([k, l, c]) => `<button class="btn ${c}" data-act="${k}">${l}</button>`).join('') || '<span class="muted" style="font-size:12px">Pedido finalizado.</span>'}</div>`);
+  const pl = $('[data-player]', dr); if (pl) pl.onclick = e => { e.preventDefault(); playerDrawer(Number(pl.dataset.player)); };
+  const after = msg => { toast(msg, 'ok'); closeLayer(); route(); };
+  const url = a => `/api/admin/orders/${encodeURIComponent(code)}/${a}`;
+  $$('[data-act]', dr).forEach(b => b.onclick = async () => {
+    const a = b.dataset.act;
+    try {
+      if (a === 'verify') { b.disabled = true; const r = await api('POST', url('verify')); toast(`Banco: ${r.provider_status || 'sem pagamento'} → pedido ${L.status[r.status]}${r.review ? ' (retido)' : ''}`, r.status === 'paid' ? 'ok' : ''); return orderDrawer(code); }
+      if (a === 'cancel') { if (await confirmDialog('Cancelar pedido', `Cancelar ${o.code}? O estoque é devolvido.`, 'Cancelar pedido')) { await api('POST', url('cancel')); after('Pedido cancelado'); } else orderDrawer(code); return; }
+      if (a === 'deliver') { await api('POST', url('deliver')); return after('Entrega registrada'); }
+      if (a === 'confirm') return stepUpDialog({ title: 'Confirmar pagamento recebido', action: 'Confirmar pagamento',
+        text: `Abra o extrato do banco e localize o Pix de ${F.money(o.total_cents)}. Copie do comprovante o ID da transação (E2E) — o sistema bloqueia comprovantes já usados e valores diferentes.`,
+        fields: `<label class="field"><span>ID da transação Pix (E2E) *</span><input class="input mono" name="e2e_id" required maxlength="32" placeholder="E00000000202611031200XXXXXXXXXXX"></label>
+          <div class="form-grid"><label class="field"><span>Valor recebido (R$) *</span><input class="input" name="amount" required inputmode="decimal" placeholder="${(o.total_cents / 100).toFixed(2).replace('.', ',')}"></label>
+          <label class="field"><span>Nome do pagador</span><input class="input" name="payer_name" maxlength="80"></label></div>`,
+        run: async (ex, d) => { await api('POST', url('confirm'), { ...ex, e2e_id: d.e2e_id, amount: d.amount, payer_name: d.payer_name }); after('Pagamento confirmado'); } });
+      if (a === 'approve') return stepUpDialog({ title: 'Liberar pedido retido', action: 'Liberar para entrega', text: 'Confirme que analisou os sinais de risco e que o pagamento é legítimo. A liberação fica registrada na auditoria.',
+        fields: '<label class="field"><span>Motivo / observação</span><input class="input" name="note" maxlength="200"></label>',
+        run: async (ex, d) => { await api('POST', url('approve'), { ...ex, note: d.note }); after('Pedido liberado'); } });
+      if (a === 'refund') return stepUpDialog({ title: 'Estornar pedido', danger: true, action: 'Estornar',
+        text: o.provider === 'mercadopago' ? `O valor de ${F.money(o.total_cents)} será devolvido ao pagador pelo Mercado Pago e o estoque restaurado.` : `O pedido será marcado como estornado. Devolva ${F.money(o.total_cents)} ao pagador manualmente.`,
+        run: async ex => { await api('POST', url('refund'), ex); after('Pedido estornado'); } });
+    } catch (e) { toast(e.message, 'err'); b.disabled = false; }
   });
 }
+const vbadge = o => o.review && ['pending', 'paid'].includes(o.status) ? `<span class="vbadge review">${icon('alert', 11)}Em análise</span>`
+  : `<span class="vbadge ${o.verification || 'none'}">${icon(L.verifIcon[o.verification] || 'alert', 11)}${L.verif[o.verification] || L.verif.none}</span>`;
+const riskBar = score => { const c = score >= 60 ? 'var(--critical)' : score >= 30 ? 'var(--warning)' : 'var(--good)'; return `<span class="risk" title="Pontuação de risco antifraude">${icon('shield', 12)}<i><b style="width:${Math.max(4, score)}%;background:${c}"></b></i>${score}</span>`; };
+
 async function manualOrder() {
   const prods = (await api('GET', '/api/admin/products')).filter(p => p.active);
   if (!prods.length) return toast('Cadastre produtos primeiro', 'err');
@@ -743,30 +838,60 @@ async function manualOrder() {
       <label class="field"><span>Pagamento</span><select class="select" name="payment_method">${Object.entries(L.pay).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></label>
       <label class="field"><span>Observação</span><input class="input" name="note"></label>
     </div>`,
-    onSubmit: async d => {
+    onSubmit: d => {
       const p = prods.find(x => x.id === Number(d.product_id));
-      const o = await api('POST', '/api/admin/orders', { ...d, game_id: p.game_id, items: [{ product_id: p.id, qty: d.qty }] });
-      toast('Venda registrada: ' + o.code, 'ok'); route();
+      stepUpDialog({ title: 'Confirmar venda manual', text: `Registrar ${d.qty}× ${p.name} como ${d.status === 'pending' ? 'aguardando pagamento' : 'paga'}. Vendas manuais ficam registradas na auditoria com seu nome.`, action: 'Registrar',
+        run: async ex => { const o = await api('POST', '/api/admin/orders', { ...d, ...ex, game_id: p.game_id, items: [{ product_id: p.id, qty: d.qty }] }); toast('Venda registrada: ' + o.code, 'ok'); route(); } });
+      return false;
     },
   });
 }
 
 // ---------------------------------------------------------------- Jogadores
+async function playerDrawer(id) {
+  const p = await api('GET', '/api/admin/players/' + id);
+  const t = p.totals;
+  const dr = drawer(`
+    <div class="dialog-h"><div><span class="label">Jogador</span><h3 style="margin-top:4px">${esc(p.username)}</h3></div><button class="btn ghost icon sm x" data-x>${icon('close', 16)}</button></div>
+    <div class="dialog-b" style="flex:1">
+      <div class="mini-kpis">
+        <div><span class="label">Total gasto</span><b>${F.money(t.spent)}</b></div>
+        <div><span class="label">Compras pagas</span><b>${F.int(t.paid_orders)}</b></div>
+        <div><span class="label">Moedas</span><b>${F.int(t.coins)}</b></div>
+        <div><span class="label">Ticket médio</span><b>${F.money(t.paid_orders ? t.spent / t.paid_orders : 0)}</b></div>
+      </div>
+      ${t.refunded || p.same_ip_accounts >= 2 || p.blocked ? `<div class="banner" style="margin-top:14px">${icon('alert', 18)}<span>${[p.blocked ? 'Conta bloqueada' : '', t.refunded ? `${F.money(t.refunded)} em estornos` : '', p.same_ip_accounts >= 2 ? `${p.same_ip_accounts} outras contas criadas do mesmo IP` : ''].filter(Boolean).join(' · ')}</span></div>` : ''}
+      <div class="section-t"><span class="label">Dados</span></div>
+      <dl class="kv"><dt>E-mail</dt><dd>${esc(p.email || '—')}</dd><dt>Origem</dt><dd>${p.origin === 'site' ? 'Site' : 'Jogo'}${p.origin_game ? ' · ' + esc(p.origin_game) : ''}</dd>
+        <dt>Cadastro</dt><dd>${F.dt(p.created_at)}</dd><dt>Primeira compra</dt><dd>${F.dt(t.first_purchase)}</dd><dt>Última compra</dt><dd>${F.dt(t.last_purchase)}</dd>
+        <dt>IDs no jogo</dt><dd>${p.links.map(l => `<span class="tag" style="margin:0 4px 4px 0">${esc(l.game)} · ${esc(l.external_id)}</span>`).join('') || '—'}</dd>
+        <dt>IP (cadastro / último)</dt><dd class="mono">${esc(p.signup_ip || '—')} / ${esc(p.last_ip || '—')}</dd></dl>
+      ${p.by_game.length ? `<div class="section-t"><span class="label">Gasto por jogo</span></div><table class="table"><tbody>${p.by_game.map(g => `<tr><td style="padding-left:0">${esc(g.game)}</td><td class="r t2">${F.int(g.orders)} compras</td><td class="r t2">${F.int(g.coins)} ${esc(g.currency_name).toLowerCase()}</td><td class="r" style="padding-right:0"><b>${F.money(g.spent)}</b></td></tr>`).join('')}</tbody></table>` : ''}
+      <div class="section-t"><span class="label">Pedidos</span></div>
+      <table class="table"><tbody>${p.orders.map(o => `<tr class="row-link" data-code="${esc(o.code)}"><td style="padding-left:0;white-space:nowrap" class="code">${esc(o.code)}<small class="muted" style="display:block;font-family:var(--font)">${F.dt(o.created_at)} · ${esc(o.game)}</small></td><td><span class="status ${o.status}">${L.status[o.status]}</span></td><td>${vbadge(o)}</td><td class="r" style="padding-right:0"><b>${F.money(o.total_cents)}</b></td></tr>`).join('') || '<tr><td class="muted">Nenhum pedido.</td></tr>'}</tbody></table>
+    </div>
+    <div class="dialog-f"><button class="btn ${p.blocked ? '' : 'danger'}" id="blk">${icon(p.blocked ? 'check' : 'lock', 15)}${p.blocked ? 'Desbloquear conta' : 'Bloquear conta'}</button></div>`);
+  $$('[data-code]', dr).forEach(tr => tr.onclick = () => orderDrawer(tr.dataset.code));
+  $('#blk').onclick = async () => {
+    if (!p.blocked && !(await confirmDialog('Bloquear conta', `${p.username} não poderá entrar nem comprar. As sessões abertas são encerradas.`, 'Bloquear'))) return playerDrawer(id);
+    await api('POST', `/api/admin/players/${id}/block`, { block: !p.blocked }); toast(p.blocked ? 'Conta desbloqueada' : 'Conta bloqueada', 'ok'); playerDrawer(id);
+  };
+}
 PAGES.jogadores = async (page) => {
   const f = state.players;
   const d = await api('GET', '/api/admin/players?' + new URLSearchParams({ q: f.q, page: f.page, sort: f.sort, size: 25 }));
   const pages = Math.max(1, Math.ceil(d.total / d.size));
-  page.innerHTML = pageHead('08 · CLIENTES', 'Jogadores', 'Contas criadas no site e jogadores registrados pelos jogos.') + `
+  page.innerHTML = pageHead('09 · CLIENTES', 'Jogadores', 'Contas criadas no site e jogadores registrados pelos jogos.') + `
     <div class="filters">
-      <div class="input-group">${icon('search', 15)}<input class="input" id="jQ" placeholder="Usuário ou e-mail" value="${esc(f.q)}"></div>
+      <div class="input-group">${icon('search', 15)}<input class="input" id="jQ" placeholder="Usuário, e-mail ou ID no jogo" value="${esc(f.q)}"></div>
       <div class="seg" id="jSort"><button data-v="" class="${!f.sort ? 'on' : ''}">Mais recentes</button><button data-v="spent" class="${f.sort === 'spent' ? 'on' : ''}">Maiores compradores</button></div>
     </div>
     <section class="panel"><div class="panel-b flush"><div class="table-wrap">
-      ${d.rows.length ? `<table class="table"><thead><tr><th>Jogador</th><th>Origem</th><th>País</th><th>Cadastro</th><th>Último acesso</th><th class="r">Compras</th><th class="r">Total gasto</th></tr></thead><tbody>
-      ${d.rows.map(p => `<tr><td><div class="cell-main"><span class="pi">${icon('user', 15)}</span><div><b>${esc(p.username)}</b><small>${esc(p.email || 'sem e-mail')}</small></div></div></td>
+      ${d.rows.length ? `<table class="table"><thead><tr><th>Jogador</th><th>Origem</th><th>País</th><th>Cadastro</th><th>Última compra</th><th class="r">Compras</th><th class="r">Moedas</th><th class="r">Total gasto</th></tr></thead><tbody>
+      ${d.rows.map(p => `<tr class="row-link" data-pid="${p.id}"><td><div class="cell-main"><span class="pi">${icon('user', 15)}</span><div><b>${esc(p.username)}${p.blocked ? ' <span class="vbadge review">bloqueado</span>' : ''}</b><small>${esc(p.email || 'sem e-mail')}</small></div></div></td>
         <td class="t2">${p.origin === 'site' ? 'Site' : 'Jogo'}${p.origin_game ? `<small class="muted" style="display:block;font-size:11px">${esc(p.origin_game)}</small>` : ''}</td>
         <td class="mono t2">${esc(p.country || '—')}</td><td class="mono t2" style="font-size:12px">${F.dt(p.created_at)}</td>
-        <td class="t2">${p.last_seen_at ? 'há ' + F.ago(p.last_seen_at) : '—'}</td><td class="r">${F.int(p.orders)}</td><td class="r"><b style="font-weight:600">${F.money(p.spent)}</b></td></tr>`).join('')}
+        <td class="t2">${p.last_purchase ? 'há ' + F.ago(p.last_purchase) : '—'}</td><td class="r">${F.int(p.orders)}</td><td class="r">${p.coins ? F.int(p.coins) : '<span class="muted">—</span>'}</td><td class="r"><b style="font-weight:600">${F.money(p.spent)}</b></td></tr>`).join('')}
       </tbody></table>` : emptyBox('players', 'Nenhum jogador', 'Jogadores aparecem aqui quando se cadastram no site ou quando o jogo os registra pela API.')}
     </div></div>
     <div class="panel-f"><span>${F.int(d.total)} jogador(es)</span><div class="pager">
@@ -775,6 +900,7 @@ PAGES.jogadores = async (page) => {
   const re = () => PAGES.jogadores(page);
   $('#jQ').oninput = e => { f.q = e.target.value; f.page = 1; clearTimeout(re.t); re.t = setTimeout(async () => { await re(); const i = $('#jQ'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 300); };
   $$('#jSort button').forEach(b => b.onclick = () => { f.sort = b.dataset.v; f.page = 1; re(); });
+  $$('[data-pid]', page).forEach(tr => tr.onclick = () => playerDrawer(Number(tr.dataset.pid)));
   $('#jPrev').onclick = () => { f.page--; re(); };
   $('#jNext').onclick = () => { f.page++; re(); };
 };
@@ -845,14 +971,14 @@ Nexus.report_purchase(player_id, <span class="s">"${sku}"</span>, <span class="n
 }
 PAGES.integracao = async (page) => {
   await loadGames();
-  if (!state.games.length) { page.innerHTML = pageHead('09 · SISTEMA', 'Integração · API', '') + `<section class="panel">${emptyBox('plug', 'Cadastre um jogo', 'Cada jogo recebe uma chave de API própria.', '<a class="btn primary" href="#/jogos">Ir para Jogos</a>')}</section>`; return; }
+  if (!state.games.length) { page.innerHTML = pageHead('10 · SISTEMA', 'Integração · API', '') + `<section class="panel">${emptyBox('plug', 'Cadastre um jogo', 'Cada jogo recebe uma chave de API própria.', '<a class="btn primary" href="#/jogos">Ir para Jogos</a>')}</section>`; return; }
   const g = state.games.find(x => String(x.id) === String(state.intGame)) || state.games[0];
   state.intGame = g.id;
   const base = location.origin;
   const sn = snippets(g, base);
   const tab = state.intTab || 'curl';
   const prods = (await api('GET', '/api/admin/products?game=' + g.id)).filter(p => p.active);
-  page.innerHTML = pageHead('09 · SISTEMA', 'Integração · API', 'Conecte seus jogos: compras feitas no jogo entram no painel, e compras feitas no site são entregues no jogo.') + `
+  page.innerHTML = pageHead('10 · SISTEMA', 'Integração · API', 'Conecte seus jogos: compras feitas no jogo entram no painel, e compras feitas no site são entregues no jogo.') + `
     <div class="filters"><span class="t2" style="display:flex">${icon('gamepad', 16)}</span><select class="select" id="iGame">${gameOptions(g.id, '')}</select><span class="range-text">API v1 · JSON · HTTPS</span></div>
     <div class="grid">
       ${panel('s6', '01', 'Credenciais', esc(g.name), '', `
@@ -860,6 +986,11 @@ PAGES.integracao = async (page) => {
           <div class="keybox"><code id="apiKey" data-key="${esc(g.api_key)}">${esc(g.api_key.slice(0, 12))}${'•'.repeat(20)}</code>
             <button class="btn sm ghost icon" id="kShow" title="Mostrar">${icon('eye', 15)}</button><button class="btn sm ghost icon" id="kCopy" title="Copiar">${icon('copy', 15)}</button><button class="btn sm ghost icon" id="kRot" title="Gerar nova chave">${icon('refresh', 15)}</button></div></label>
         <label class="field" style="margin-top:14px"><span>URL base</span><div class="keybox"><code>${esc(base)}/api/v1</code><button class="btn sm ghost icon" id="bCopy">${icon('copy', 15)}</button></div></label>
+        <div class="section-t"><span class="label">Assinatura HMAC (anti-fraude)</span></div>
+        <p class="t2" style="font-size:12.5px;margin-bottom:10px">Com a assinatura, cada requisição leva <code>X-Nexus-Timestamp</code> e <code>X-Nexus-Signature = HMAC-SHA256(segredo, "ts.MÉTODO.caminho.corpo")</code>. Requisições forjadas ou repetidas são recusadas e as compras ficam marcadas como <b style="color:var(--text)">assinadas</b>.</p>
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><button class="btn sm" id="sigGen">${icon('key', 14)}${g.has_signing_secret ? 'Gerar novo segredo' : 'Criar segredo'}</button>
+          <label class="switch"><input type="checkbox" id="sigReq" ${g.require_signature ? 'checked' : ''} ${g.has_signing_secret ? '' : 'disabled'}> Exigir assinatura</label>
+          <span class="vbadge ${g.require_signature ? 'provider' : 'game_reported'}">${g.require_signature ? 'Obrigatória' : 'Opcional'}</span></div>
         <div class="section-t"><span class="label">Como funciona</span></div>
         <ol class="t2" style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:8px;font-size:13px">
           <li><b style="color:var(--text)">Compra no jogo:</b> a loja da plataforma (Google Play, App Store, Steam) cobra o jogador e o jogo chama <code>POST /purchases</code> com <code>status: "paid"</code>. A venda aparece aqui na hora.</li>
@@ -887,10 +1018,13 @@ PAGES.integracao = async (page) => {
   $('#kShow').onclick = () => { k.textContent = k.textContent.includes('•') ? k.dataset.key : k.dataset.key.slice(0, 12) + '•'.repeat(20); };
   $('#kCopy').onclick = () => copy(k.dataset.key);
   $('#bCopy').onclick = () => copy(base + '/api/v1');
-  $('#kRot').onclick = async () => {
-    if (!(await confirmDialog('Gerar nova chave', 'A chave atual para de funcionar imediatamente. Você vai precisar atualizar o jogo.', 'Gerar nova chave'))) return;
-    await api('POST', `/api/admin/games/${g.id}/rotate-key`); toast('Nova chave gerada', 'ok'); PAGES.integracao(page);
-  };
+  $('#kRot').onclick = () => stepUpDialog({ title: 'Gerar nova chave', text: 'A chave atual para de funcionar imediatamente. Você vai precisar atualizar o jogo.', action: 'Gerar nova chave', danger: true,
+    run: async ex => { await api('POST', `/api/admin/games/${g.id}/rotate-key`, ex); toast('Nova chave gerada', 'ok'); PAGES.integracao(page); } });
+  $('#sigGen').onclick = () => stepUpDialog({ title: g.has_signing_secret ? 'Gerar novo segredo de assinatura' : 'Criar segredo de assinatura', text: 'O segredo é mostrado uma única vez. Guarde-o no servidor do jogo (nunca no cliente público, se puder evitar).', action: 'Gerar',
+    run: async ex => { const r = await api('POST', `/api/admin/games/${g.id}/signing`, { ...ex, regenerate: true }); showSecretOnce('Segredo de assinatura', r.signing_secret); await loadGames(); } });
+  $('#sigReq').onchange = e => { const want = e.target.checked; e.target.checked = !want;
+    stepUpDialog({ title: want ? 'Exigir assinatura' : 'Desativar exigência de assinatura', text: want ? 'Requisições sem assinatura HMAC válida serão recusadas. Garanta que o jogo já envia a assinatura.' : 'Requisições sem assinatura voltarão a ser aceitas (compras ficam marcadas como "informado pelo jogo").', action: 'Confirmar', danger: !want,
+      run: async ex => { await api('POST', `/api/admin/games/${g.id}/signing`, { ...ex, require: want }); toast('Configuração de assinatura atualizada', 'ok'); await loadGames(); PAGES.integracao(page); } }); };
   $('#tForm').onsubmit = async e => {
     e.preventDefault();
     const d = formData(e.target);
@@ -909,41 +1043,188 @@ PAGES.integracao = async (page) => {
 
 // ---------------------------------------------------------------- Configurações
 PAGES.config = async (page) => {
-  const s = await api('GET', '/api/admin/settings');
-  page.innerHTML = pageHead('10 · SISTEMA', 'Configurações', 'Dados da loja, recebimento via Pix e integrações de pagamento.') + `
+  const [s, admins] = await Promise.all([api('GET', '/api/admin/settings'), api('GET', '/api/admin/admins')]);
+  const mp = s.payment_provider === 'mercadopago';
+  page.innerHTML = pageHead('12 · SISTEMA', 'Configurações', 'Loja, recebimento, verificação automática de pagamentos e administradores.') + `
     <div class="grid">
-      ${panel('s6', '01', 'Loja', '', '', `<form id="sStore" class="form-grid">
+      ${panel('s6', '01', 'Recebimento e verificação', `ativo: <b style="color:var(--text)">${L.provider[s.provider_active]}</b>`, '', `<form id="sPay" class="form-grid">
+        <div class="full seg" id="provSeg"><button type="button" data-v="mercadopago" class="${mp ? 'on' : ''}">${icon('shield', 14)}Mercado Pago (automático)</button><button type="button" data-v="manual_pix" class="${!mp ? 'on' : ''}">${icon('pix', 14)}Pix manual</button></div>
+        <input type="hidden" name="payment_provider" value="${mp ? 'mercadopago' : 'manual_pix'}">
+        <p class="full t2" style="font-size:12.5px" id="provHelp"></p>
+        <div class="full mpOnly ${mp ? '' : 'hidden'}" style="display:grid;gap:14px">
+          <label class="field"><span>Access Token de produção</span><input class="input mono" name="mp_access_token" autocomplete="off" placeholder="${s.mp_access_token_set ? 'configurado: ' + esc(s.mp_access_token_hint) + ' — deixe vazio para manter' : 'APP_USR-…'}"><small>Mercado Pago → Suas integrações → Credenciais de produção. Fica criptografado no servidor.</small></label>
+          <label class="field"><span>Assinatura secreta do webhook</span><input class="input mono" name="mp_webhook_secret" autocomplete="off" placeholder="${s.mp_webhook_secret_set ? 'configurada: ' + esc(s.mp_webhook_secret_hint) : 'chave secreta das notificações'}"><small>Mercado Pago → Webhooks → evento "Pagamentos" → Assinatura secreta.</small></label>
+          <label class="field"><span>URL pública do site</span><input class="input mono" name="public_url" value="${esc(s.public_url)}" placeholder="https://seusite.com.br"><small>Webhook a cadastrar: <code>${esc(s.webhook_url)}</code></small></label>
+        </div>
+        <div class="full manualOnly ${mp ? 'hidden' : ''}" style="display:grid;gap:14px">
+          <label class="field"><span>Chave Pix</span><input class="input mono" name="pix_key" value="${esc(s.pix_key)}" placeholder="e-mail, CPF/CNPJ, telefone ou chave aleatória"></label>
+          <div class="form-grid"><label class="field"><span>Nome do recebedor</span><input class="input" name="pix_name" value="${esc(s.pix_name)}" maxlength="25"></label>
+          <label class="field"><span>Cidade</span><input class="input" name="pix_city" value="${esc(s.pix_city)}" maxlength="15"></label></div>
+        </div>
+        <div class="full" style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary">Salvar</button>${mp && s.mp_access_token_set ? '<button type="button" class="btn" id="testProv">Testar conexão</button>' : ''}</div></form>`)}
+      ${panel('s6', '02', 'Administradores', 'quem pode abrir este painel', '', `
+        <ul class="adm-list">${admins.map(a => `<li><span class="pi">${icon(a.owner ? 'key' : 'user', 15)}</span><div><b>${esc(a.email)}</b><small>${a.owner ? 'Dono (definido no servidor)' : 'Administrador'}${a.activated ? ` · ${a.totp_enabled ? '2FA ativo' : 'sem 2FA'}${a.last_login_at ? ' · último acesso ' + F.dt(a.last_login_at) : ''}` : ' · ainda não entrou'}</small></div>
+          ${!a.owner && state.me.role === 'owner' ? `<button class="btn sm ghost icon danger" data-rm="${esc(a.email)}" title="Remover">${icon('trash', 15)}</button>` : ''}</li>`).join('')}</ul>
+        ${state.me.role === 'owner' ? `<form id="addAdm" style="display:flex;gap:8px;margin-top:14px"><input class="input" name="email" type="email" placeholder="e-mail do novo administrador"><button class="btn">${icon('plus', 15)}Adicionar</button></form>
+          <p class="muted" style="font-size:12px;margin-top:10px">A pessoa entra pelo site com esse e-mail (confirmado). Contas sem e-mail na lista veem só a loja.</p>`
+        : '<p class="muted" style="font-size:12px;margin-top:10px">Somente o dono pode adicionar ou remover administradores.</p>'}`)}
+      ${panel('s6', '03', 'Loja', '', '', `<form id="sStore" class="form-grid">
         <label class="field full"><span>Nome exibido no site</span><input class="input" name="store_name" value="${esc(s.store_name)}" placeholder="NEXUS Games"></label>
         <label class="field full"><span>E-mail de suporte</span><input class="input" name="support_email" value="${esc(s.support_email)}"></label>
         <div class="full"><button class="btn primary">Salvar</button></div></form>`)}
-      ${panel('s6', '02', 'Recebimento via Pix', 'gera o Pix copia-e-cola de cada pedido', '', `<form id="sPix" class="form-grid">
-        <label class="field full"><span>Chave Pix</span><input class="input mono" name="pix_key" value="${esc(s.pix_key)}" placeholder="e-mail, CPF/CNPJ, telefone ou chave aleatória"></label>
-        <label class="field"><span>Nome do recebedor</span><input class="input" name="pix_name" value="${esc(s.pix_name)}" maxlength="25"></label>
-        <label class="field"><span>Cidade</span><input class="input" name="pix_city" value="${esc(s.pix_city)}" maxlength="15"></label>
-        <div class="full"><button class="btn primary">Salvar</button></div></form>`)}
-      ${panel('s6', '03', 'Webhook de pagamento', 'confirmação automática', '', `<form id="sHook" class="form-grid">
-        <p class="full t2" style="font-size:13px">Para confirmar pagamentos sem ação manual, configure seu provedor (Mercado Pago, PagSeguro, Asaas…) ou uma automação para chamar:</p>
-        <div class="full keybox"><code>POST ${esc(location.origin)}/api/webhooks/payment</code></div>
-        <p class="full muted" style="font-size:12px">Corpo: <code>{"code":"NX-XXXX-XXXX","status":"paid"}</code> · Cabeçalho: <code>X-Webhook-Secret</code></p>
-        <label class="field full"><span>Segredo do webhook</span><div style="display:flex;gap:8px"><input class="input mono" name="webhook_secret" id="whs" value="${esc(s.webhook_secret)}"><button type="button" class="btn" id="genSecret">${icon('refresh', 14)}Gerar</button></div></label>
-        <div class="full"><button class="btn primary">Salvar</button></div></form>`)}
       ${panel('s6', '04', 'Dados', '', '', `
-        <p class="t2" style="font-size:13px;margin-bottom:14px">Gere um conjunto completo de demonstração (3 jogos, produtos, milhares de jogadores, 120 dias de vendas e telemetria) para explorar o painel. <b style="color:var(--text)">Isso substitui jogos, jogadores, pedidos e eventos atuais.</b></p>
+        <p class="t2" style="font-size:13px;margin-bottom:14px">Gere um conjunto de demonstração (3 jogos, milhares de jogadores, 120 dias de vendas e telemetria). <b style="color:var(--text)">Substitui jogos, jogadores, pedidos e eventos atuais.</b> Desativado em produção.</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="demoBtn">${icon('database', 15)}Gerar dados de demonstração</button><a class="btn" href="/api/admin/export/orders.csv">${icon('download', 15)}Exportar pedidos (CSV)</a></div>`)}
     </div>`;
-  const save = async (e) => { e.preventDefault(); await api('PUT', '/api/admin/settings', formData(e.target)); toast('Configurações salvas', 'ok'); };
-  ['#sStore', '#sPix', '#sHook'].forEach(id => $(id).onsubmit = e => save(e).catch(err => toast(err.message, 'err')));
-  $('#genSecret').onclick = () => { $('#whs').value = [...crypto.getRandomValues(new Uint8Array(24))].map(b => b.toString(16).padStart(2, '0')).join(''); };
+  const help = { mercadopago: 'Cada Pix é gerado pelo Mercado Pago. Quando o cliente paga, o servidor consulta o pagamento direto na API (com seu token), confere valor e pedido, e só então libera a entrega. Webhooks sem assinatura válida são recusados.', manual_pix: 'Pix estático com a sua chave. Não há confirmação automática: você confere o extrato e confirma cada pedido informando o ID E2E do comprovante.' };
+  const setProv = v => { $('[name=payment_provider]').value = v; $$('#provSeg button').forEach(b => b.classList.toggle('on', b.dataset.v === v)); $$('.mpOnly').forEach(e => e.classList.toggle('hidden', v !== 'mercadopago')); $$('.manualOnly').forEach(e => e.classList.toggle('hidden', v === 'mercadopago')); $('#provHelp').textContent = help[v]; };
+  setProv(mp ? 'mercadopago' : 'manual_pix');
+  $$('#provSeg button').forEach(b => b.onclick = () => setProv(b.dataset.v));
+  $('#sPay').onsubmit = e => { e.preventDefault(); const d = formData(e.target);
+    for (const k of ['mp_access_token', 'mp_webhook_secret']) if (!d[k]) delete d[k];
+    stepUpDialog({ title: 'Alterar recebimento', text: 'Alterações de pagamento exigem confirmação e ficam registradas na auditoria.', action: 'Salvar alterações',
+      run: async ex => { const r = await api('PUT', '/api/admin/settings', { ...d, ...ex }); toast(r.changed.length ? 'Configurações de pagamento salvas' : 'Nada mudou', 'ok'); route(); } }); };
+  const tp = $('#testProv'); if (tp) tp.onclick = async () => { try { const r = await api('POST', '/api/admin/settings/test-provider'); toast(`Conectado à conta ${r.account}${r.live ? '' : ' (modo TESTE)'}`, 'ok'); } catch (e) { toast(e.message, 'err'); } };
+  $('#sStore').onsubmit = async e => { e.preventDefault(); try { await api('PUT', '/api/admin/settings', formData(e.target)); toast('Configurações salvas', 'ok'); } catch (err) { toast(err.message, 'err'); } };
+  const add = $('#addAdm'); if (add) add.onsubmit = e => { e.preventDefault(); const email = formData(e.target).email; if (!email) return;
+    stepUpDialog({ title: 'Adicionar administrador', text: `${email} terá acesso total ao painel (vendas, pagamentos, jogadores).`, action: 'Adicionar', run: async ex => { await api('POST', '/api/admin/admins', { ...ex, email }); toast('Administrador adicionado', 'ok'); route(); } }); };
+  $$('[data-rm]').forEach(b => b.onclick = () => stepUpDialog({ title: 'Remover administrador', danger: true, text: `${b.dataset.rm} perde o acesso imediatamente (sessões encerradas).`, action: 'Remover',
+    run: async ex => { await api('POST', '/api/admin/admins', { ...ex, email: b.dataset.rm, remove: true }); toast('Administrador removido', 'ok'); route(); } }));
   $('#demoBtn').onclick = demoData;
 };
-async function demoData() {
-  if (!(await confirmDialog('Gerar dados de demonstração', 'Isso substitui todos os jogos, produtos, jogadores, pedidos e eventos atuais por dados fictícios.', 'Gerar dados'))) return;
-  toast('Gerando dados… isso leva alguns segundos');
-  await api('POST', '/api/admin/demo');
-  await loadGames();
-  toast('Dados de demonstração prontos', 'ok');
-  location.hash = '#/comando'; route();
+function demoData() {
+  stepUpDialog({ title: 'Gerar dados de demonstração', danger: true, text: 'Isso substitui todos os jogos, produtos, jogadores, pedidos e eventos atuais por dados fictícios.', action: 'Gerar dados',
+    run: async ex => { toast('Gerando dados… isso leva alguns segundos'); await api('POST', '/api/admin/demo', ex); await loadGames(); toast('Dados de demonstração prontos', 'ok'); location.hash = '#/comando'; route(); } });
 }
+
+// ---------------------------------------------------------------- Pagamentos (central de verificação)
+const SEC_LABEL = {
+  'admin.login': 'Login no painel', 'admin.logout': 'Saída do painel', 'admin.login_failed': 'Falha de login no painel', 'admin.2fa_failed': 'Código 2FA incorreto', 'admin.created': 'Administrador ativado',
+  'admin.added': 'Administrador adicionado', 'admin.removed': 'Administrador removido', 'admin.uid_mismatch': 'Tentativa de login com conta trocada', '2fa.enabled': '2FA ativado', '2fa.disabled': '2FA desativado',
+  '2fa.recovery_used': 'Código de recuperação usado', 'stepup.failed': 'Confirmação de identidade falhou', 'stepup.failed_2fa': 'Confirmação 2FA falhou', 'sessions.revoked': 'Sessões encerradas',
+  'payment.mismatch': 'Pagamento com valor/pedido divergente', 'payment.manual_confirm': 'Pagamento confirmado manualmente', 'payment.e2e_reuse': 'Comprovante Pix reutilizado', 'payment.chargeback': 'Contestação (chargeback)',
+  'payment.refunded': 'Estorno no provedor', 'payment.verify_requested': 'Consulta de pagamento', 'payment.charge_failed': 'Falha ao gerar cobrança', 'webhook.rejected': 'Webhook com assinatura inválida', 'webhook.unknown_order': 'Webhook de pedido desconhecido',
+  'api.bad_key': 'Chave de API inválida', 'api.signature_rejected': 'Assinatura de jogo rejeitada', 'ip.blocked': 'IP bloqueado automaticamente', 'ip.unblocked': 'IP desbloqueado', 'csrf.blocked': 'Requisição de outro site bloqueada',
+  'order.review_approved': 'Pedido liberado após análise', 'order.refunded': 'Pedido estornado', 'order.canceled': 'Pedido cancelado', 'order.delivered_manual': 'Entrega manual', 'order.manual_created': 'Venda manual registrada',
+  'settings.changed': 'Configurações alteradas', 'game.key_rotated': 'Chave de API trocada', 'game.signing_updated': 'Assinatura do jogo alterada', 'game.deleted': 'Jogo excluído', 'game.created': 'Jogo criado', 'game.updated': 'Jogo editado',
+  'product.price_changed': 'Preço alterado', 'product.created': 'Produto criado', 'product.deleted': 'Produto excluído', 'player.blocked': 'Jogador bloqueado', 'player.unblocked': 'Jogador desbloqueado', 'player.blocked_login': 'Conta bloqueada tentou entrar',
+  'player.login_failed': 'Falha de login de jogador', 'export.orders': 'Exportação de pedidos', 'data.demo_generated': 'Dados de demonstração gerados',
+};
+state.pay = { tab: 'all', q: '', page: 1 };
+PAGES.pagamentos = async (page) => {
+  const f = state.pay;
+  const tabs = { all: ['Todos', {}], review: ['Em análise', { review: '1' }], pending: ['Aguardando', { status: 'pending' }], provider: ['Verificados no banco', { verification: 'provider' }],
+    manual: ['Conferidos à mão', { verification: 'manual' }], reported: ['Só informados pelo jogo', { verification: 'game_reported' }], refunded: ['Estornos', { status: 'refunded' }] };
+  const [sum, d] = await Promise.all([api('GET', '/api/admin/payments/summary?days=30'),
+    api('GET', '/api/admin/orders?' + new URLSearchParams({ ...tabs[f.tab][1], q: f.q, page: f.page, size: 25 }))]);
+  const pages = Math.max(1, Math.ceil(d.total / d.size));
+  page.innerHTML = pageHead('03 · OPERAÇÃO', 'Pagamentos', 'Quem pagou, quanto pagou e como cada pagamento foi comprovado.',
+    `<span class="vbadge ${sum.provider === 'mercadopago' ? 'provider' : 'game_reported'}" style="height:34px;padding:0 12px">${icon(sum.provider === 'mercadopago' ? 'shield' : 'info', 13)}${sum.provider === 'mercadopago' ? 'Verificação automática ativa' : 'Pix manual — conferência no extrato'}</span>`) + `
+    ${sum.review ? `<div class="banner" style="margin-bottom:14px;border-color:rgba(208,59,59,.5);background:rgba(208,59,59,.08);color:#ffb0b0">${icon('alert', 18)}<span><b>${sum.review} pedido(s) retido(s) para análise antifraude.</b> Nenhum item é entregue até você revisar.</span><button class="btn sm" id="goReview">Revisar agora</button></div>` : ''}
+    <div class="kpis">
+      ${[['Receita verificada', F.money(sum.verified), 'banco ou loja da plataforma', 'shield'], ['Conferida manualmente', F.money(sum.manual), 'Pix confirmado com E2E', 'check'],
+        ['Sem verificação forte', F.money(sum.unverified), 'informada pelo jogo, sem assinatura', 'info'], ['Aguardando pagamento', F.money(sum.pending_amount), `${F.int(sum.pending)} pedido(s) · ${F.int(sum.expired)} expiraram`, 'pix'],
+        ['Em análise', F.int(sum.review), 'retidos pelo antifraude', 'alert'], ['Divergências de valor', F.int(sum.mismatches), 'pago ≠ esperado', 'alert'],
+        ['Estornado', F.money(sum.refunded), 'devolvido ao comprador', 'refresh'], ['A entregar', F.int(sum.to_deliver), 'pagos, aguardando o jogo', 'send']]
+        .map(([l, v, sub, ic]) => `<section class="panel kpi"><div class="k-top">${icon(ic, 15)}<span class="label">${l}</span></div><div class="k-val">${v}</div><div class="k-bot"><span class="muted" style="font-size:11.5px">${sub} · 30 dias</span></div></section>`).join('')}
+    </div>
+    <div class="filters">
+      <div class="seg" id="pTabs">${Object.entries(tabs).map(([k, [l]]) => `<button data-v="${k}" class="${f.tab === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <div class="input-group">${icon('search', 15)}<input class="input" id="pQ" placeholder="Pedido, comprador, pagador, E2E ou ID do pagamento" value="${esc(f.q)}"></div>
+    </div>
+    <section class="panel"><div class="panel-b flush"><div class="table-wrap">
+      ${d.rows.length ? `<table class="table"><thead><tr><th>Pedido</th><th>Comprador</th><th>Pagador</th><th class="r">Esperado</th><th class="r">Recebido</th><th>Comprovação</th><th>Risco</th><th>Status</th></tr></thead><tbody>
+        ${d.rows.map(o => `<tr class="row-link" data-code="${esc(o.code)}">
+          <td class="code">${esc(o.code)}<small class="muted" style="display:block;font-family:var(--font);font-size:11px">${F.dt(o.created_at)} · ${esc(o.game_name)}</small></td>
+          <td>${esc(o.username || o.customer_name || '—')}<small class="muted" style="display:block;font-size:11px">${esc(o.email || (o.external_player_id ? 'ID ' + o.external_player_id : ''))}</small></td>
+          <td>${esc(o.payer_name || '—')}<small class="muted mono" style="display:block;font-size:10.5px">${esc(o.e2e_id ? o.e2e_id.slice(0, 18) + '…' : o.provider_payment_id ? 'MP #' + o.provider_payment_id : L.pay[o.payment_method] || '')}</small></td>
+          <td class="r">${F.money(o.total_cents)}</td>
+          <td class="r">${o.paid_amount_cents == null ? '<span class="muted">—</span>' : o.paid_amount_cents === o.total_cents ? F.money(o.paid_amount_cents) : `<b style="color:#f07a7a">${F.money(o.paid_amount_cents)}</b>`}</td>
+          <td>${vbadge(o)}</td><td>${riskBar(o.risk_score)}</td><td><span class="status ${o.status}">${L.status[o.status]}</span></td></tr>`).join('')}
+      </tbody></table>` : emptyBox('shield', 'Nada por aqui', 'Nenhum pagamento nesta categoria.')}
+    </div></div>
+    <div class="panel-f"><span>${F.int(d.total)} pedido(s)</span><div class="pager">
+      <button class="btn sm icon" id="pPrev" ${f.page <= 1 ? 'disabled' : ''}>${icon('chevronLeft', 15)}</button><span class="mono">${f.page} / ${pages}</span>
+      <button class="btn sm icon" id="pNext" ${f.page >= pages ? 'disabled' : ''}>${icon('chevronRight', 15)}</button></div></div></section>`;
+  const re = () => PAGES.pagamentos(page);
+  $$('#pTabs button').forEach(b => b.onclick = () => { f.tab = b.dataset.v; f.page = 1; re(); });
+  const gr = $('#goReview'); if (gr) gr.onclick = () => { f.tab = 'review'; f.page = 1; re(); };
+  $('#pQ').oninput = e => { f.q = e.target.value; f.page = 1; clearTimeout(re.t); re.t = setTimeout(async () => { await re(); const i = $('#pQ'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 300); };
+  $('#pPrev').onclick = () => { f.page--; re(); };
+  $('#pNext').onclick = () => { f.page++; re(); };
+  $$('[data-code]', page).forEach(tr => tr.onclick = () => orderDrawer(tr.dataset.code));
+};
+
+// ---------------------------------------------------------------- Segurança
+state.audit = { page: 1, severity: '' };
+PAGES.seguranca = async (page) => {
+  const [s, log] = await Promise.all([api('GET', '/api/admin/security'), api('GET', '/api/admin/audit?' + new URLSearchParams({ page: state.audit.page, severity: state.audit.severity }))]);
+  const okCount = s.checks.filter(c => c.ok).length;
+  const pages = Math.max(1, Math.ceil(log.total / log.size));
+  const sevIc = { info: 'info', warning: 'alert', critical: 'alert' };
+  page.innerHTML = pageHead('11 · SISTEMA', 'Segurança', 'Proteções ativas, verificação em duas etapas, sessões e trilha de auditoria à prova de adulteração.') + `
+    <div class="kpis">
+      ${[['Proteções ativas', `${okCount}/${s.checks.length}`, 'checklist abaixo', 'shield'], ['Falhas de login (7d)', F.int(s.stats.failed_logins), 'senha ou 2FA incorretos', 'lock'],
+        ['Ataques bloqueados (7d)', F.int((s.stats.webhook_rejected || 0) + (s.stats.bad_signatures || 0) + (s.stats.ip_blocked || 0)), 'webhooks, assinaturas e IPs', 'alert'], ['Pedidos em análise', F.int(s.review_count), 'antifraude', 'eye']]
+        .map(([l, v, sub, ic]) => `<section class="panel kpi"><div class="k-top">${icon(ic, 15)}<span class="label">${l}</span></div><div class="k-val">${v}</div><div class="k-bot"><span class="muted" style="font-size:11.5px">${sub}</span></div></section>`).join('')}
+    </div>
+    <div class="grid">
+      ${panel('s6', '01', 'Checklist de proteção', '', '', `<ul class="checks">${s.checks.map(c => `<li class="${c.ok ? 'ok' : 'no'}"><span class="ck">${icon(c.ok ? 'check' : 'alert', 14)}</span><div><b>${esc(c.label)}</b><small>${esc(c.hint)}</small></div></li>`).join('')}</ul>`)}
+      ${panel('s6', '02', 'Verificação em duas etapas (2FA)', s.totp_enabled ? 'ativa' : 'desativada', '', s.totp_enabled
+        ? `<p class="t2" style="font-size:13px">Seu login no painel pede um código do app autenticador (Google Authenticator, Authy, 1Password…). Códigos de recuperação restantes: <b style="color:var(--text)">${s.recovery_left}</b>.</p>
+           <button class="btn danger" id="tfaOff" style="margin-top:14px">${icon('lock', 15)}Desativar 2FA</button>`
+        : `<p class="t2" style="font-size:13px">Mesmo que alguém descubra sua senha, não entra sem o código do seu celular. <b style="color:var(--text)">Fortemente recomendado.</b></p>
+           <div id="tfaBox" style="margin-top:14px"><button class="btn primary" id="tfaOn">${icon('shield', 15)}Ativar 2FA</button></div>`)}
+      ${panel('s6', '03', 'Sessões abertas', 'sua conta', `<button class="btn sm" id="revAll">Encerrar as outras</button>`, `<ul class="sess">${s.sessions.map(x => `<li><span class="pi">${icon(/mobile|android|iphone/i.test(x.user_agent || '') ? 'phone' : 'monitor', 15)}</span>
+        <div><b>${esc(uaName(x.user_agent))}${x.current ? ' <span class="vbadge provider">esta sessão</span>' : ''}</b><small class="mono">${esc(x.ip || '')} · ativa há ${F.ago(x.last_seen_at)} · desde ${F.dt(x.created_at)}</small></div>
+        ${x.current ? '' : `<button class="btn sm ghost icon" data-rev="${x.id}" title="Encerrar">${icon('close', 15)}</button>`}</li>`).join('')}</ul>
+        <p class="muted" style="font-size:12px;margin-top:10px">Sessões do painel expiram após ${state.me.idle_minutes} min sem uso e no máximo em 12 h.</p>`)}
+      ${panel('s6', '04', 'IPs bloqueados', 'bloqueio automático por abuso', '', s.blocked.length ? `<ul class="sess">${s.blocked.map(b => `<li><span class="pi">${icon('globe', 15)}</span><div><b class="mono">${esc(b.ip)}</b><small>até ${F.dt(b.until)}</small></div><button class="btn sm" data-unb="${esc(b.ip)}">Desbloquear</button></li>`).join('')}</ul>`
+        : '<p class="t2" style="font-size:13px">Nenhum IP bloqueado agora. Quem excede repetidamente os limites de requisição é bloqueado por 15 minutos.</p>')}
+      ${panel('s12', '05', 'Trilha de auditoria', `${F.int(s.chain.records)} registros · cadeia de hash ${s.chain.ok ? '<span style="color:var(--good-text)">íntegra</span>' : `<b style="color:#f07a7a">QUEBRADA no registro #${s.chain.broken_at}</b>`}`,
+        `<div class="seg" id="sevSeg">${[['', 'Tudo'], ['critical', 'Crítico'], ['warning', 'Atenção'], ['info', 'Info']].map(([k, l]) => `<button data-v="${k}" class="${state.audit.severity === k ? 'on' : ''}">${l}</button>`).join('')}</div>`,
+        `<div class="table-wrap"><table class="table"><thead><tr><th>Quando</th><th>Evento</th><th>Quem</th><th>Alvo</th><th>IP</th><th>Hash</th></tr></thead><tbody>
+        ${log.rows.map(r => `<tr><td class="mono t2" style="font-size:12px;white-space:nowrap">${F.dt(r.at)}</td>
+          <td><span class="sev ${r.severity}">${icon(sevIc[r.severity], 13)}</span>${esc(SEC_LABEL[r.action] || r.action)}</td>
+          <td class="t2">${esc(r.actor_name || (r.actor_type === 'system' ? 'sistema' : r.actor_type === 'anon' ? 'anônimo' : r.actor_type + (r.actor_id ? ' #' + r.actor_id : '')))}</td>
+          <td class="mono t2" style="font-size:12px">${esc(r.target || '')}</td><td class="mono t2" style="font-size:12px">${esc(r.ip || '')}</td><td class="mono muted" style="font-size:11px" title="${esc(r.hash)}">${esc(r.hash.slice(0, 10))}…</td></tr>`).join('')}
+        </tbody></table></div><div class="panel-f"><span>Cada registro carrega o hash do anterior: qualquer alteração no banco quebra a cadeia.</span><div class="pager">
+        <button class="btn sm icon" id="aPrev" ${state.audit.page <= 1 ? 'disabled' : ''}>${icon('chevronLeft', 15)}</button><span class="mono">${state.audit.page} / ${pages}</span>
+        <button class="btn sm icon" id="aNext" ${state.audit.page >= pages ? 'disabled' : ''}>${icon('chevronRight', 15)}</button></div></div>`, 'flush')}
+    </div>`;
+  const re = () => PAGES.seguranca(page);
+  $$('#sevSeg button').forEach(b => b.onclick = () => { state.audit = { page: 1, severity: b.dataset.v }; re(); });
+  $('#aPrev').onclick = () => { state.audit.page--; re(); };
+  $('#aNext').onclick = () => { state.audit.page++; re(); };
+  $('#revAll').onclick = async () => { await api('POST', '/api/admin/sessions/revoke', { all: true }); toast('Outras sessões encerradas', 'ok'); re(); };
+  $$('[data-rev]').forEach(b => b.onclick = async () => { await api('POST', '/api/admin/sessions/revoke', { id: b.dataset.rev }); toast('Sessão encerrada', 'ok'); re(); });
+  $$('[data-unb]').forEach(b => b.onclick = async () => { await api('POST', '/api/admin/security/unblock', { ip: b.dataset.unb }); toast('IP desbloqueado', 'ok'); re(); });
+  const off = $('#tfaOff'); if (off) off.onclick = () => stepUpDialog({ title: 'Desativar 2FA', danger: true, text: 'Sua conta volta a depender só da senha/Google. Não recomendado.', action: 'Desativar',
+    run: async ex => { await api('POST', '/api/admin/2fa/disable', ex); state.me.totp_enabled = false; toast('2FA desativado', 'ok'); re(); } });
+  const on = $('#tfaOn'); if (on) on.onclick = async () => {
+    const r = await api('POST', '/api/admin/2fa/setup');
+    let qr = ''; try { const q = qrcode(0, 'M'); q.addData(r.uri); q.make(); qr = q.createSvgTag({ cellSize: 4, margin: 0, scalable: true }); } catch { }
+    $('#tfaBox').innerHTML = `<div class="tfa"><div class="qr-s">${qr}</div><div style="display:flex;flex-direction:column;gap:10px;min-width:0">
+      <p class="t2" style="font-size:12.5px">1. Escaneie o QR Code no app autenticador.<br>2. Ou digite a chave: <code style="word-break:break-all">${esc(r.secret)}</code><br>3. Informe o código de 6 dígitos:</p>
+      <form id="tfaForm" style="display:flex;gap:8px"><input class="input mono" name="code" maxlength="6" inputmode="numeric" style="letter-spacing:.25em;max-width:140px"><button class="btn primary">Ativar</button></form>
+      <div class="nxl-msg err" id="tfaErr"></div></div></div>`;
+    $('#tfaForm').onsubmit = async e => {
+      e.preventDefault();
+      try {
+        const res = await api('POST', '/api/admin/2fa/enable', formData(e.target));
+        state.me.totp_enabled = true;
+        $('#layer').innerHTML = `<div class="overlay"><div class="dialog" style="max-width:520px"><div class="dialog-h"><h3>2FA ativado — guarde seus códigos de recuperação</h3></div>
+          <div class="dialog-b"><p class="t2" style="font-size:13px;margin-bottom:14px">Se perder o celular, cada código abaixo permite <b style="color:var(--text)">um</b> acesso. Guarde em local seguro. Eles não serão mostrados de novo.</p>
+          <div class="codes">${res.recovery_codes.map(c => `<code>${esc(c)}</code>`).join('')}</div></div>
+          <div class="dialog-f"><button class="btn" id="cpCodes">${icon('copy', 15)}Copiar</button><button class="btn primary" data-x>Guardei os códigos</button></div></div></div>`;
+        $('#cpCodes').onclick = () => copy(res.recovery_codes.join('\n'));
+        $$('#layer [data-x]').forEach(b => b.onclick = () => { closeLayer(); re(); });
+      } catch (err) { $('#tfaErr').textContent = err.message; }
+    };
+  };
+};
+const uaName = ua => { ua = ua || ''; const b = /Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : 'Navegador';
+  const o = /Windows/.test(ua) ? 'Windows' : /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS' : /Mac OS/.test(ua) ? 'macOS' : /Linux/.test(ua) ? 'Linux' : ''; return o ? `${b} · ${o}` : b; };
 
 // ============================================================ paleta de comandos (Ctrl K)
 function commandPalette() {
@@ -1002,54 +1283,66 @@ function connectStream() {
     const item = { kind: 'event', type: d.type, platform: d.platform, at: d.at, game: g?.name };
     ['#feed', '#lvFeed'].forEach(id => { const ul = $(id); if (ul) ul.insertAdjacentHTML('afterbegin', feedItem(item, true)); });
   });
-  es.addEventListener('order_status', () => refreshPendingBadge());
+  es.addEventListener('order_status', e => { const d = JSON.parse(e.data); if (d.status === 'paid' && d.prev === 'pending') toast(`Pagamento confirmado · ${d.code} · ${F.money(d.total_cents)}`, 'ok'); refreshPendingBadge(); });
+  es.addEventListener('security', e => { const d = JSON.parse(e.data); if (d.severity === 'critical') toast(`Alerta de segurança: ${SEC_LABEL[d.action] || d.action}${d.target ? ' · ' + d.target : ''}`, 'err'); });
 }
 
-// ============================================================ autenticação
-async function showAuth() {
-  $('#app').classList.add('hidden');
-  const auth = $('#auth');
-  auth.classList.remove('hidden');
-  const { needsSetup } = await api('GET', '/api/admin/setup');
-  auth.innerHTML = `
-    <div class="auth-art">
+// ============================================================ autenticação (Firebase)
+const AUTH_ART = () => `<div class="auth-art">
       <svg class="bg" viewBox="0 0 600 800" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
         ${[...Array(12)].map((_, i) => `<circle cx="470" cy="260" r="${50 + i * 46}" fill="none" stroke="#3987e5" stroke-opacity="${0.42 - i * 0.03}" ${i % 2 ? 'stroke-dasharray="2 7"' : ''}/>`).join('')}
         <path d="M470 0V800M0 260H600" stroke="#3987e5" stroke-opacity=".2"/>
         ${[...Array(40)].map((_, i) => `<path d="M${40 + i * 13} 760v${i % 5 ? -5 : -12}" stroke="#fff" stroke-opacity=".25"/>`).join('')}
       </svg>
       <div style="display:flex;align-items:center;gap:12px"><img src="/assets/logo.svg" width="32" height="32" alt=""><b style="letter-spacing:.2em">NEXUS</b><span class="label">Control</span></div>
-      <div><span class="label" style="color:var(--accent)">Hub de jogos · v1.0</span><h2 style="margin-top:14px">Todos os seus jogos, vendas e jogadores em um só painel.</h2>
-        <p>Receita, moedas vendidas, downloads e telemetria em tempo real — conectados direto à API dos seus jogos.</p></div>
-      <div class="label">© ${new Date().getFullYear()} · Sessão protegida</div>
-    </div>
-    <div class="auth-form"><form id="authForm" novalidate>
-      <div><span class="label">${needsSetup ? 'Primeiro acesso' : 'Acesso restrito'}</span><h1 style="margin-top:8px">${needsSetup ? 'Crie a conta de administrador' : 'Entrar no painel'}</h1></div>
-      ${needsSetup ? `<label class="field"><span>Seu nome</span><input class="input" name="name" autocomplete="name"></label>` : ''}
-      <label class="field"><span>E-mail</span><div class="input-group">${icon('user', 15)}<input class="input" name="email" type="email" autocomplete="username" required></div></label>
-      <label class="field"><span>Senha</span><div class="input-group">${icon('lock', 15)}<input class="input" name="password" type="password" autocomplete="${needsSetup ? 'new-password' : 'current-password'}" required minlength="8"></div>${needsSetup ? '<small>Mínimo de 8 caracteres.</small>' : ''}</label>
-      <div class="err" id="authErr"></div>
-      <button class="btn primary lg" type="submit">${needsSetup ? 'Criar conta e entrar' : 'Entrar'}${icon('arrowUpRight', 16)}</button>
-    </form></div>`;
-  $('#authForm').onsubmit = async e => {
-    e.preventDefault();
-    try { await api('POST', needsSetup ? '/api/admin/setup' : '/api/admin/login', formData(e.target)); boot(); }
-    catch (err) { $('#authErr').textContent = err.message; }
-  };
-  $('input', auth).focus();
+      <div><span class="label" style="color:var(--accent)">Acesso restrito · administradores</span><h2 style="margin-top:14px">Todos os seus jogos, vendas e jogadores em um só painel.</h2>
+        <p>Login protegido pelo Firebase, e-mail verificado, verificação em duas etapas e auditoria de cada ação.</p></div>
+      <div class="label">${icon('shield', 13)} Conexão monitorada · tentativas registradas</div>
+    </div>`;
+async function showAuth(view = 'login', data = {}) {
+  $('#app').classList.add('hidden');
+  es?.close();
+  const auth = $('#auth');
+  auth.classList.remove('hidden');
+  auth.innerHTML = AUTH_ART() + '<div class="auth-form"><div class="auth-box" id="authBox"></div></div>';
+  const box = $('#authBox');
+  if (view === 'login') {
+    NXLogin(box, { title: 'Entrar no painel', kicker: 'Acesso restrito', subtitle: 'Use o e-mail cadastrado como administrador.', onDone: r => {
+      if (r.mfa_required) return showAuth('mfa', r);
+      if (r.is_admin) return boot();
+      showAuth('denied', r);
+    } });
+  } else if (view === 'mfa') {
+    box.innerHTML = `<form class="nxl" novalidate><div class="nxl-h"><span class="label">Etapa 2 de 2</span><h2>Verificação em duas etapas</h2><p>Digite o código de 6 dígitos do seu app autenticador, ou um código de recuperação.</p></div>
+      <input class="input mono" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="14" style="height:52px;font-size:22px;letter-spacing:.35em;text-align:center">
+      <div class="nxl-msg err" id="mErr"></div><button class="btn primary lg">Verificar</button><a href="#" class="nxl-link" id="back">Usar outra conta</a></form>`;
+    $('form', box).onsubmit = async e => { e.preventDefault(); try { await NXAuth.mfa(data.mfa_token, formData(e.target).code); boot(); } catch (err) { $('#mErr').textContent = err.message; } };
+    $('#back').onclick = async e => { e.preventDefault(); await (await NXWhenAuth()).logout(); showAuth(); };
+    $('input', box).focus();
+  } else {
+    box.innerHTML = `<div class="nxl"><div class="nxl-h"><span class="label" style="color:var(--warning)">Sem permissão</span><h2>Esta conta não é de administrador</h2>
+      <p>${esc(data.admin_pending || 'Você entrou como jogador. O painel é exclusivo para e-mails autorizados pelo dono do sistema.')}</p></div>
+      <a class="btn primary lg" href="/mercado">${icon('cart', 16)}Ir para a loja</a><button class="btn lg" id="other">Entrar com outra conta</button></div>`;
+    $('#other').onclick = async () => { await (await NXWhenAuth()).logout(); showAuth(); };
+  }
 }
 
 async function boot() {
   try { state.me = await api('GET', '/api/admin/me'); }
-  catch { state.me = null; return showAuth(); }
+  catch {
+    state.me = null;
+    try { const m = await api('GET', '/api/auth/me'); if (m.player) return showAuth('denied'); } catch { }
+    return showAuth();
+  }
   $('#auth').classList.add('hidden');
   $('#app').classList.remove('hidden');
   const ini = (state.me.name || state.me.email).split(/\s+/).map(s => s[0]).join('').slice(0, 2).toUpperCase();
   $('#me').innerHTML = `<span class="av">${esc(ini)}</span><div class="who"><b>${esc(state.me.name)}</b><span>${esc(state.me.email)}</span></div><button class="btn ghost icon sm" id="logout" title="Sair">${icon('logout', 16)}</button>`;
-  $('#logout').onclick = async () => { await api('POST', '/api/admin/logout'); state.me = null; es?.close(); showAuth(); };
+  $('#logout').onclick = async () => { await (await NXWhenAuth()).logout(); state.me = null; es?.close(); showAuth(); };
   await loadGames();
   connectStream();
   route();
+  if (!state.me.totp_enabled) setTimeout(() => toast('Recomendado: ative a verificação em duas etapas em Segurança.'), 1500);
 }
 
 // shell

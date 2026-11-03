@@ -57,7 +57,7 @@ function seed({ days = 120 } = {}) {
     let L = Math.exp(-l), k = 0, p = 1; do { k++; p *= r(); } while (p > L); return k - 1; };
 
   tx(() => {
-    db.exec(`DELETE FROM order_items; DELETE FROM orders; DELETE FROM events; DELETE FROM player_links; DELETE FROM sessions WHERE kind = 'player'; DELETE FROM players; DELETE FROM products; DELETE FROM games;`);
+    db.exec(`DELETE FROM order_events; DELETE FROM order_items; DELETE FROM orders; DELETE FROM events; DELETE FROM player_links; DELETE FROM sessions WHERE kind = 'player'; DELETE FROM players; DELETE FROM products; DELETE FROM games;`);
     if (!getSetting('store_name')) setSetting('store_name', 'NEXUS Games');
     if (!getSetting('pix_key')) { setSetting('pix_key', 'pagamentos@nexusgames.dev'); setSetting('pix_name', 'NEXUS GAMES'); setSetting('pix_city', 'SAO PAULO'); }
 
@@ -80,11 +80,20 @@ function seed({ days = 120 } = {}) {
       return { ...g, id, products, players: [] };
     });
 
-    const insP = db.prepare('INSERT INTO players(username, email, origin, origin_game_id, country, created_at, last_seen_at) VALUES (?,?,?,?,?,?,?)');
+    const insP = db.prepare('INSERT INTO players(username, email, origin, origin_game_id, country, created_at, last_seen_at, email_verified) VALUES (?,?,?,?,?,?,?,?)');
     const insL = db.prepare('INSERT INTO player_links(player_id, game_id, external_id) VALUES (?,?,?)');
     const insE = db.prepare('INSERT INTO events(type, game_id, player_id, visitor_id, platform, country, created_at) VALUES (?,?,?,?,?,?,?)');
-    const insO = db.prepare(`INSERT INTO orders(code, game_id, player_id, external_player_id, channel, platform, payment_method, status, total_cents, coins_total, items_total, customer_name, created_at, paid_at, delivered_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    const insO = db.prepare(`INSERT INTO orders(code, game_id, player_id, external_player_id, channel, platform, payment_method, status, total_cents, coins_total, items_total, customer_name, created_at, paid_at, delivered_at,
+        provider, provider_payment_id, provider_status, verification, paid_amount_cents, payer_name, payer_doc, e2e_id, risk_score, risk_flags, review, expires_at, ip, verified_at, external_ref)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    const insEv = db.prepare('INSERT INTO order_events(order_id, at, kind, message, actor) VALUES (?,?,?,?,?)');
+    const FIRST = ['Lucas', 'Ana', 'Pedro', 'Júlia', 'Rafael', 'Beatriz', 'Gustavo', 'Camila', 'Mateus', 'Larissa', 'Bruno', 'Fernanda', 'Thiago', 'Mariana', 'Diego'];
+    const LAST = ['Silva', 'Santos', 'Oliveira', 'Souza', 'Lima', 'Pereira', 'Costa', 'Rodrigues', 'Almeida', 'Nascimento', 'Carvalho', 'Ribeiro'];
+    const ALNUM = 'ABCDEFGHJKLMNPQRSTUVWXYZ0123456789';
+    const rs = n => Array.from({ length: n }, () => ALNUM[Math.floor(r() * ALNUM.length)]).join('');
+    const digits = n => Array.from({ length: n }, () => Math.floor(r() * 10)).join('');
+    const e2e = iso => 'E' + pick(['18236120', '60746948', '00000000', '90400888', '00360305']) + iso.replace(/\D/g, '').slice(0, 12) + rs(11);
+    const RISKS = [[20, 'new_account', 'Conta criada há menos de 15 minutos'], [25, 'velocity', '3 pedidos da mesma conta na última hora'], [30, 'shared_id', 'ID de jogador vinculado a outra conta do site'], [25, 'multi_account', '4 contas criadas do mesmo IP em 24h']];
     const insI = db.prepare('INSERT INTO order_items(order_id, product_id, sku, name, type, qty, unit_cents, coins) VALUES (?,?,?,?,?,?,?,?)');
     let pseq = 0, vseq = 0;
     const visitors = [];
@@ -122,7 +131,7 @@ function seed({ days = 120 } = {}) {
         for (let k = 0; k < signups; k++) {
           const t = at(ds), fromSite = r() < 0.3;
           const u = `${pick(NAMES)}${pick(['', '_', '.', ''])}${Math.floor(r() * 9999)}`;
-          const res = insP.run(`${u}-${++pseq}`, fromSite ? `${u}${pseq}@mail.com` : null, fromSite ? 'site' : 'game', g.id, country(), t, t);
+          const res = insP.run(`${u}-${++pseq}`, fromSite ? `${u}${pseq}@mail.com` : null, fromSite ? 'site' : 'game', g.id, country(), t, t, fromSite ? 1 : 0);
           const pid = Number(res.lastInsertRowid);
           const ext = `${g.slug.slice(0, 2).toUpperCase()}${100000 + pseq}`;
           insL.run(pid, g.id, ext);
@@ -147,15 +156,37 @@ function seed({ days = 120 } = {}) {
           const total = prod.price * qty;
           const inGame = r() < 0.62;
           const plat = inGame ? pick(g.platforms.split(',')) : 'web';
-          const method = inGame ? (plat === 'android' ? 'google_play' : plat === 'ios' ? 'app_store' : pick(['pix', 'card', 'steam'], [5, 3, 2])) : pick(['pix', 'card'], [7, 3]);
+          const method = inGame ? (plat === 'android' ? 'google_play' : plat === 'ios' ? 'app_store' : pick(['pix', 'card', 'steam'], [5, 3, 2])) : 'pix';
           const t = at(ds);
           const roll = r();
-          const status = i < 1 && roll < 0.25 ? 'pending' : i < 2 && roll < 0.35 ? 'paid' : roll < 0.035 ? 'refunded' : roll < 0.075 ? 'canceled' : roll < 0.11 && i < 6 ? 'pending' : 'delivered';
+          let status = i < 1 && roll < 0.25 ? 'pending' : i < 2 && roll < 0.35 ? 'paid' : roll < 0.035 ? 'refunded' : roll < 0.075 ? 'canceled' : roll < 0.11 ? 'pending' : 'delivered';
+          if (status === 'pending' && (i >= 1 || inGame)) status = inGame ? 'canceled' : 'expired';
           const paidAt = ['paid', 'delivered', 'refunded'].includes(status) ? new Date(Date.parse(t) + 60000 * (1 + r() * 20)).toISOString() : null;
           if (Date.parse(t) > nowMs) continue;
+          const paidLike = ['paid', 'delivered', 'refunded'].includes(status);
+          // risco: a maioria baixo; alguns pedidos recentes retidos para análise
+          let flags = [];
+          if (r() < 0.12) flags.push(pick(RISKS));
+          const held = !inGame && status === 'paid' && i < 2 && r() < 0.35;
+          if (held) flags = [RISKS[0], RISKS[2], RISKS[3]];
+          const score = Math.min(100, flags.reduce((a, f) => a + f[0], 0) + (total >= 30000 ? 20 : 0));
+          const verification = !paidLike ? 'none' : inGame ? (r() < 0.7 ? 'game_signed' : 'game_reported') : (r() < 0.93 ? 'provider' : 'manual');
+          const fn = pick(FIRST) + ' ' + pick(LAST);
           const o = insO.run(orderCode(), g.id, p.id, p.ext, inGame ? 'in_game' : 'site', plat, method, status, total,
-            prod.coins * qty, qty, null, t, paidAt, status === 'delivered' ? paidAt : null);
-          insI.run(Number(o.lastInsertRowid), prod.id, prod.sku, prod.name, prod.type, qty, prod.price, prod.coins);
+            prod.coins * qty, qty, null, t, paidAt, status === 'delivered' ? paidAt : null,
+            inGame ? 'store' : (verification === 'manual' ? 'manual_pix' : 'mercadopago'),
+            inGame ? null : digits(11), inGame ? null : ({ delivered: 'approved', paid: 'approved', refunded: 'refunded', expired: 'cancelled', canceled: 'cancelled', pending: 'pending' }[status]),
+            verification, paidLike ? total : null, paidLike && !inGame ? fn : null, paidLike && !inGame ? `***.${digits(3)}.${digits(3)}-**` : null,
+            paidLike && !inGame ? e2e(paidAt || t) : null, score, JSON.stringify(flags.map(([points, code, text]) => ({ points, code, text }))), held ? 1 : 0,
+            !inGame ? new Date(Date.parse(t) + 30 * 60000).toISOString() : null, `177.${Math.floor(r() * 255)}.${Math.floor(r() * 255)}.${Math.floor(r() * 255)}`,
+            paidLike ? paidAt : null, inGame && paidLike ? (plat === 'android' ? 'GPA.' + digits(4) + '-' + digits(4) + '-' + digits(4) : rs(16)) : null);
+          const oid = Number(o.lastInsertRowid);
+          insI.run(oid, prod.id, prod.sku, prod.name, prod.type, qty, prod.price, prod.coins);
+          insEv.run(oid, t, 'created', `Pedido criado via ${inGame ? 'jogo' : 'site'}${score ? ` — risco ${score}/100` : ''}`, 'system');
+          if (paidLike) insEv.run(oid, paidAt, 'status', inGame ? 'Compra confirmada pela loja da plataforma' : verification === 'manual' ? 'Pagamento conferido manualmente no extrato' : 'Pagamento confirmado e verificado no Mercado Pago', inGame ? 'jogo:' + g.slug : 'system');
+          if (held) insEv.run(oid, paidAt, 'alert', 'Pedido retido para análise antifraude: ' + flags.map(f => f[1 + 1]).join('; '), 'antifraude');
+          if (status === 'delivered') insEv.run(oid, paidAt, 'status', 'Itens creditados no jogo', 'jogo:' + g.slug);
+          if (status === 'refunded') insEv.run(oid, new Date(Date.parse(paidAt) + 86400000).toISOString(), 'status', 'Pagamento estornado', 'system');
         }
       }
     }

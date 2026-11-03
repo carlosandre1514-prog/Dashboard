@@ -44,6 +44,8 @@ function kpis(from, to, gameId) {
   const w = where('', from, to, gameId);
   const o = db.prepare(`SELECT
       COALESCE(SUM(CASE WHEN ${PAID} THEN total_cents END),0) revenue,
+      COALESCE(SUM(CASE WHEN ${PAID} AND verification IN ('provider','manual','game_signed','webhook') AND review = 0 THEN total_cents END),0) verified_revenue,
+      SUM(CASE WHEN review = 1 AND status IN ('pending','paid') THEN 1 ELSE 0 END) in_review,
       COUNT(*) orders,
       SUM(CASE WHEN ${PAID} THEN 1 ELSE 0 END) paid_orders,
       COALESCE(SUM(CASE WHEN ${PAID} THEN coins_total END),0) coins,
@@ -137,6 +139,9 @@ function breakdowns(from, to, gameId) {
     heatmap: q(`SELECT CAST(strftime('%w', ${LOCAL('o.created_at')}) AS INTEGER) dow,
         CAST(strftime('%H', ${LOCAL('o.created_at')}) AS INTEGER) hour, COUNT(*) orders, SUM(o.total_cents) revenue
       FROM orders o WHERE ${w.sql} AND ${paid} GROUP BY dow, hour`),
+    topBuyers: q(`SELECT p.id, p.username, p.email, COUNT(*) orders, SUM(o.total_cents) spent, SUM(o.coins_total) coins, MAX(o.created_at) last
+      FROM orders o JOIN players p ON p.id = o.player_id WHERE ${w.sql} AND ${paid} GROUP BY p.id ORDER BY spent DESC LIMIT 10`),
+    byVerification: q(`SELECT o.verification key, COUNT(*) orders, SUM(o.total_cents) revenue FROM orders o WHERE ${w.sql} AND ${paid} GROUP BY o.verification ORDER BY revenue DESC`),
     countries: (() => {
       const we = where('', from, to, gameId);
       return db.prepare(`SELECT country key, COUNT(DISTINCT visitor_id) visitors FROM events
