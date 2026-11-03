@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NEXUS · Painel de controle</title>
+  <link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/assets/base.css">
+  <link rel="stylesheet" href="/admin/admin.css">
+</head>
+<body>
+  <!-- autenticação -->
+  <div id="auth" class="auth hidden"></div>
+
+  <!-- aplicação -->
+  <div id="app" class="shell hidden">
+    <aside class="rail" id="rail">
+      <div class="rail-brand">
+        <svg class="logo" width="28" height="28" viewBox="0 0 32 32" aria-hidden="true">
+          <path d="M16 2.5l11.7 6.75v13.5L16 29.5 4.3 22.75V9.25z" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <path d="M11 21V11l10 10V11" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="square"/>
+        </svg>
+        <div class="rail-brand-t"><b>NEXUS</b><span class="label">Control</span></div>
+      </div>
+      <nav class="rail-nav" id="nav"></nav>
+      <div class="rail-foot">
+        <div class="me" id="me"></div>
+      </div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <button class="btn ghost icon sm" id="railToggle" aria-label="Recolher menu"></button>
+        <div class="crumbs" id="crumbs"></div>
+        <button class="cmdk-btn" id="cmdkBtn"><span id="cmdkIcon"></span><span>Buscar ou executar…</span><span class="kbd">Ctrl K</span></button>
+        <div class="sys">
+          <span class="sys-i" title="Conexão em tempo real com o servidor"><i class="led" id="ledStream"></i><span class="label">Stream</span></span>
+          <span class="sys-i"><span class="label" id="clock">--:--:--</span></span>
+        </div>
+      </header>
+      <main class="page" id="page"></main>
+    </div>
+  </div>
+
+  <div id="layer"></div>
+  <div class="toasts" id="toasts"></div>
+
+  <script src="/assets/icons.js"></script>
+  <script src="/assets/charts.js"></script>
+  <script src="/assets/cover.js"></script>
+  <script src="/admin/admin.js"></script>
+</body>
+</html>
