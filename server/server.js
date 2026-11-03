@@ -3,7 +3,8 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const { db, tx, newApiKey, newToken, orderCode, getSetting, setSetting, DATA_DIR } = require('./db');
+const { db, tx, newApiKey, newToken, orderCode, getSetting, setSetting, DATA_DIR, DB_FILE } = require('./db');
+const cloud = require('./cloudbackup');
 const sec = require('./security');
 sec.initKey(DATA_DIR);
 const { audit, verifyChain, orderEvent, onAudit } = require('./audit');
@@ -130,6 +131,7 @@ function registerFailure(table, row) {
 // ============================================================ tempo real (SSE)
 const streams = new Set();
 function broadcast(type, data) {
+  if (type === 'order' || type === 'order_status' || type === 'order_update') cloud.soon();
   const msg = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const res of streams) res.write(msg);
 }
@@ -138,6 +140,7 @@ pay.onChange((o, prev) => {
   const g = db.prepare('SELECT name FROM games WHERE id = ?').get(o.game_id);
   broadcast(prev === o.status ? 'order_update' : 'order_status', { code: o.code, status: o.status, prev, verification: o.verification, review: o.review, total_cents: o.total_cents, game: g?.name });
 });
+onAudit(r => { if (r.actor_type === 'admin') cloud.soon(); });
 onAudit(r => { if (r.severity !== 'info') broadcast('security', { action: r.action, severity: r.severity, target: r.target, ip: r.ip, at: r.at }); });
 sec.setOnBlock((ip, kind) => audit('system', null, 'ip.blocked', { ip, severity: 'critical', details: { reason: `limite excedido repetidamente (${kind})`, minutes: 15 } }));
 
@@ -406,6 +409,7 @@ route('GET', '/api/admin/security', async req => {
     { ok: !!a.totp_enabled, label: 'Verificação em duas etapas (2FA)', hint: a.totp_enabled ? 'Ativa na sua conta' : 'Ative abaixo — protege mesmo se a senha vazar' },
     { ok: pay.provider() === 'mercadopago', label: 'Verificação automática de pagamento', hint: pay.provider() === 'mercadopago' ? 'Mercado Pago conectado — status conferido direto na API' : 'Pix estático exige conferência manual do extrato' },
     { ok: pay.provider() !== 'mercadopago' || s('mp_webhook_secret'), label: 'Assinatura do webhook', hint: pay.provider() !== 'mercadopago' ? 'Não se aplica ao Pix manual' : s('mp_webhook_secret') ? 'Notificações sem assinatura válida são rejeitadas' : 'Cadastre a chave secreta do webhook do Mercado Pago' },
+    { ok: cloud.enabled() && !cloud.status().error, label: 'Backup criptografado na nuvem', hint: !cloud.enabled() ? 'Desativado — em hospedagem gratuita defina FIREBASE_SERVICE_ACCOUNT, senão os dados se perdem ao reiniciar' : cloud.status().error ? 'Última tentativa falhou: ' + cloud.status().error.message : cloud.status().last ? `Última cópia ${new Date(cloud.status().last.at).toLocaleString('pt-BR')} · ${Math.ceil(cloud.status().last.bytes / 1024)} KB` : 'Ativo — a primeira cópia sai na próxima alteração' },
     { ok: !!process.env.APP_SECRET, label: 'Chave mestra de criptografia em variável de ambiente', hint: process.env.APP_SECRET ? 'APP_SECRET definida' : 'Usando data/secret.key — em produção defina APP_SECRET fora do servidor de arquivos' },
     { ok: db.prepare('SELECT COUNT(*) n FROM games').get().n === 0 || db.prepare('SELECT COUNT(*) n FROM games WHERE require_signature = 0').get().n === 0, label: 'Jogos com assinatura obrigatória', hint: 'Exija requisições assinadas (HMAC) em Integração · API para bloquear compras forjadas' },
   ];
@@ -1098,15 +1102,30 @@ server.headersTimeout = 15000;
 server.keepAliveTimeout = 5000;
 server.maxHeadersCount = 64;
 
-if (require.main === module) {
+function listen() {
   pay.startJobs();
+  cloud.start(db, DB_FILE);
   // limpeza periódica de sessões vencidas
   setInterval(() => db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now()), 3600000).unref();
+  // desligamento gracioso (Render/hospedagens enviam SIGTERM): salva a última cópia antes de sair
+  let closing = false;
+  const shutdown = async sig => {
+    if (closing) return; closing = true;
+    console.log(`\n[${sig}] encerrando…`);
+    server.close();
+    for (const res of streams) res.end();
+    await cloud.snapshot(db, DB_FILE).catch(() => { });
+    process.exit(0);
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
   server.listen(PORT, () => {
     console.log(`\n  NEXUS rodando em http://localhost:${PORT}`);
     console.log(`  Site:   http://localhost:${PORT}/`);
     console.log(`  Painel: http://localhost:${PORT}/admin`);
-    console.log(`  Pagamento: ${pay.provider() === 'mercadopago' ? 'Mercado Pago (verificação automática)' : 'Pix manual (conferência no painel)'}\n`);
+    console.log(`  Pagamento: ${pay.provider() === 'mercadopago' ? 'Mercado Pago (verificação automática)' : 'Pix manual (conferência no painel)'}`);
+    console.log(`  Backup na nuvem: ${cloud.enabled() ? 'ativo (Firestore)' : 'desativado'}\n`);
   });
 }
-module.exports = { server };
+if (require.main === module) listen();
+module.exports = { server, listen };

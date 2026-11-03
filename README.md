@@ -74,14 +74,29 @@ A tela **Pagamentos** mostra, para cada pedido:
 | Dados | Tokens e segredos criptografados (AES-256-GCM) com a `APP_SECRET`, CPF guardado mascarado, links `javascript:` bloqueados e CSV protegido contra injeção de fórmula. |
 | Auditoria | Cada login, falha, confirmação, estorno e mudança de configuração é registrado numa **cadeia de hash**: se alguém alterar o banco, o painel mostra exatamente onde. |
 
-### Publicar no Render
-1. No Render: **New → Blueprint**, conecte o GitHub e escolha este repositório e o branch.
-2. O `render.yaml` cria tudo: serviço Node 22, disco de 1 GB em `/var/data`, HTTPS, `APP_SECRET` gerada.
-   Informe o seu e-mail em `ADMIN_EMAILS` quando o Render pedir.
-3. Depois do deploy, adicione `seu-app.onrender.com` (ou seu domínio) em Firebase → Authentication → Settings → Authorized domains.
-4. No painel: Configurações → URL pública do site = `https://seu-app.onrender.com`. É ela que forma a URL do webhook do Mercado Pago.
+### Publicar de graça no Render
+O plano gratuito do Render apaga o disco sempre que o serviço dorme (15 min sem visitas) ou é atualizado.
+Por isso o servidor salva o banco **criptografado no Firestore do seu Firebase** (grátis no plano Spark) e o
+restaura sozinho ao ligar. Pedidos e pagamentos são salvos em segundos, e o resto a cada 5 minutos.
 
-O plano grátis do Render não tem disco persistente (o banco seria apagado a cada deploy), por isso o Blueprint usa o plano Starter.
+1. **Firestore:** no console do Firebase → *Firestore Database* → *Criar banco de dados* (modo produção).
+   Em *Regras*, deixe tudo bloqueado (só o servidor acessa):
+   `rules_version = '2'; service cloud.firestore { match /databases/{db}/documents { match /{doc=**} { allow read, write: if false; } } }`
+2. **Conta de serviço:** Firebase → ⚙ *Configurações do projeto* → *Contas de serviço* → *Gerar nova chave privada*.
+   Baixa um arquivo `.json`. **Esse arquivo dá acesso total ao projeto: não envie ao GitHub nem a ninguém.**
+3. **Render:** *New → Blueprint* → escolha este repositório. Preencha:
+   - `ADMIN_EMAILS` = seu e-mail;
+   - `FIREBASE_SERVICE_ACCOUNT` = o conteúdo inteiro do `.json`.
+4. Depois do deploy, adicione `seu-app.onrender.com` em Firebase → Authentication → Settings → *Authorized domains*.
+5. No painel → *Configurações* → URL pública = `https://seu-app.onrender.com`. Em *Segurança*, confira se
+   "Backup criptografado na nuvem" está verde.
+
+Limites do gratuito:
+- Depois de 15 min sem visitas o site "dorme", e a primeira visita leva cerca de 1 minuto para abrir.
+  Os webhooks do Mercado Pago são reenviados e acordam o servidor.
+- Uma queda brusca pode perder no máximo os últimos segundos de alterações. Pagamentos do Mercado Pago
+  são reconferidos na API ao voltar.
+- Quando o movimento crescer, mude `plan: free` para `starter` com um disco (o backup pode continuar ligado).
 
 ### Em produção
 - Rode atrás de HTTPS (Caddy, Nginx ou Cloudflare) com `TRUST_PROXY=1`, `FORCE_HTTPS=1` e `NODE_ENV=production`.

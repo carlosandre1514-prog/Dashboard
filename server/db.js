@@ -7,7 +7,8 @@ const { DatabaseSync } = require('node:sqlite');
 
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
 fs.mkdirSync(DATA_DIR, { recursive: true });
-const db = new DatabaseSync(process.env.DB_FILE || path.join(DATA_DIR, 'nexus.db'));
+const DB_FILE = process.env.DB_FILE || path.join(DATA_DIR, 'nexus.db');
+const db = new DatabaseSync(DB_FILE);
 
 db.exec(`
 PRAGMA journal_mode = WAL;
@@ -213,4 +214,4 @@ function tx(fn) {
 const getSetting = k => db.prepare('SELECT value FROM settings WHERE key = ?').get(k)?.value ?? null;
 const setSetting = (k, v) => db.prepare('INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(k, v);
 
-module.exports = { db, tx, newApiKey, newToken, orderCode, getSetting, setSetting, DATA_DIR };
+module.exports = { db, tx, newApiKey, newToken, orderCode, getSetting, setSetting, DATA_DIR, DB_FILE };

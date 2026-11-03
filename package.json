@@ -6,7 +6,7 @@
   "main": "server/server.js",
   "engines": { "node": ">=22.13" },
   "scripts": {
-    "start": "node server/server.js",
+    "start": "node server/start.js",
     "dev": "node --watch server/server.js",
     "seed": "node server/seed.js",
     "test": "node --test tests/*.test.js"

@@ -1,30 +1,28 @@
 # Blueprint do Render: New → Blueprint → selecione este repositório.
+# Plano GRATUITO: o disco é apagado quando o serviço dorme/reinicia, por isso o banco é salvo
+# (criptografado) no Firestore do seu Firebase e restaurado automaticamente ao ligar.
 services:
   - type: web
     name: nexus
     runtime: node
-    plan: starter            # o banco (SQLite) precisa de disco persistente, que não existe no plano grátis
+    plan: free
     region: virginia
     buildCommand: echo "sem dependências para instalar"
     startCommand: npm start
     healthCheckPath: /healthz
     autoDeploy: true
-    disk:
-      name: nexus-data
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
       - key: NODE_VERSION
         value: "22"
       - key: NODE_ENV
         value: production
-      - key: DATA_DIR
-        value: /var/data
       - key: TRUST_PROXY
         value: "1"
       - key: FORCE_HTTPS
         value: "1"
       - key: APP_SECRET
-        generateValue: true  # chave mestra gerada pelo Render, fica fora do disco
+        generateValue: true      # chave que criptografa o banco e o backup — NÃO apague nem troque
       - key: ADMIN_EMAILS
-        sync: false          # o Render pede o valor na criação: seu e-mail de administrador
+        sync: false              # seu e-mail de administrador
+      - key: FIREBASE_SERVICE_ACCOUNT
+        sync: false              # JSON da conta de serviço do Firebase (backup no Firestore)
