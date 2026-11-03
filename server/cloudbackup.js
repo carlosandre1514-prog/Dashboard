@@ -18,9 +18,21 @@ function serviceAccount() {
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT;
   if (!raw) return null;
   let txt = raw.trim();
-  if (!txt.startsWith('{')) txt = Buffer.from(txt, 'base64').toString('utf8'); // aceita JSON puro ou base64
-  const sa = JSON.parse(txt);
-  if (!sa.client_email || !sa.private_key || !sa.project_id) throw new Error('FIREBASE_SERVICE_ACCOUNT incompleta');
+  if (!txt.startsWith('{')) { try { txt = Buffer.from(txt, 'base64').toString('utf8'); } catch { } } // aceita base64
+  let sa;
+  try { sa = JSON.parse(txt); }
+  catch {
+    // colado pelo celular/painel pode quebrar as linhas da chave: extrai os campos mesmo assim
+    const pick = k => (txt.match(new RegExp(`"${k}"\\s*:\\s*"([^"]*)"`)) || [])[1];
+    const key = (txt.match(/-----BEGIN PRIVATE KEY-----[\s\S]*?-----END PRIVATE KEY-----/) || [])[0];
+    sa = { project_id: pick('project_id'), client_email: pick('client_email'), token_uri: pick('token_uri'), private_key: key };
+  }
+  if (sa.private_key) {
+    const body = sa.private_key.replace(/\\n/g, '\n').replace(/-----(BEGIN|END) PRIVATE KEY-----/g, '').replace(/[^A-Za-z0-9+/=]/g, '');
+    sa.private_key = `-----BEGIN PRIVATE KEY-----\n${body.match(/.{1,64}/g)?.join('\n')}\n-----END PRIVATE KEY-----\n`;
+  }
+  if (!sa.client_email || !sa.private_key || !sa.project_id) throw new Error('FIREBASE_SERVICE_ACCOUNT incompleta ou colada errada: cole o conteúdo inteiro do arquivo .json, do primeiro { ao último }');
+  try { require('node:crypto').createPrivateKey(sa.private_key); } catch { throw new Error('A "private_key" do FIREBASE_SERVICE_ACCOUNT está corrompida: copie o .json de novo, sem alterar nada'); }
   return sa;
 }
 const enabled = () => !!process.env.FIREBASE_SERVICE_ACCOUNT;
