@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GameStore Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎮</text></svg>">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand"><span class="logo">🎮</span> GameStore</div>
+      <button class="nav-btn active" data-view="visao"><span class="ico">📊</span> Visão geral</button>
+      <button class="nav-btn" data-view="lojas"><span class="ico">🏪</span> Minhas lojas</button>
+      <button class="nav-btn" data-view="produtos"><span class="ico">🪙</span> Produtos</button>
+      <button class="nav-btn" data-view="pedidos"><span class="ico">🧾</span> Pedidos</button>
+      <button class="nav-btn" data-view="config"><span class="ico">⚙️</span> Configurações</button>
+      <div class="spacer"></div>
+      <small style="padding: 0 10px">Dados salvos neste navegador</small>
+    </aside>
+
+    <main class="main">
+      <div class="topbar">
+        <div class="row">
+          <button class="btn ghost menu-toggle" id="menuToggle" aria-label="Menu">☰</button>
+          <div>
+            <h1 id="viewTitle">Visão geral</h1>
+            <small id="viewSub"></small>
+          </div>
+        </div>
+        <div class="row" id="topActions"></div>
+      </div>
+      <div id="view"></div>
+    </main>
+  </div>
+
+  <div id="modalRoot"></div>
+
+  <script src="js/db.js"></script>
+  <script src="js/admin.js"></script>
+</body>
+</html>
