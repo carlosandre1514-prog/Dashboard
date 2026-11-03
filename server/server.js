@@ -1044,6 +1044,8 @@ function serveStatic(req, res, pathname) {
 
 // ============================================================ servidor
 const server = http.createServer(async (req, res) => {
+  // verificação de saúde do provedor de hospedagem (Render etc.)
+  if (req.url === '/healthz') { res.writeHead(200, { 'Content-Type': 'text/plain' }); return res.end('ok'); }
   req.ip = sec.clientIp(req);
   let url;
   try { url = new URL(req.url, 'http://x'); } catch { return send(res, 400, 'URL inválida'); }

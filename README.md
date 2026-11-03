@@ -74,6 +74,15 @@ A tela **Pagamentos** mostra, para cada pedido:
 | Dados | Tokens e segredos criptografados (AES-256-GCM) com a `APP_SECRET`, CPF guardado mascarado, links `javascript:` bloqueados e CSV protegido contra injeção de fórmula. |
 | Auditoria | Cada login, falha, confirmação, estorno e mudança de configuração é registrado numa **cadeia de hash**: se alguém alterar o banco, o painel mostra exatamente onde. |
 
+### Publicar no Render
+1. No Render: **New → Blueprint**, conecte o GitHub e escolha este repositório e o branch.
+2. O `render.yaml` cria tudo: serviço Node 22, disco de 1 GB em `/var/data`, HTTPS, `APP_SECRET` gerada.
+   Informe o seu e-mail em `ADMIN_EMAILS` quando o Render pedir.
+3. Depois do deploy, adicione `seu-app.onrender.com` (ou seu domínio) em Firebase → Authentication → Settings → Authorized domains.
+4. No painel: Configurações → URL pública do site = `https://seu-app.onrender.com`. É ela que forma a URL do webhook do Mercado Pago.
+
+O plano grátis do Render não tem disco persistente (o banco seria apagado a cada deploy), por isso o Blueprint usa o plano Starter.
+
 ### Em produção
 - Rode atrás de HTTPS (Caddy, Nginx ou Cloudflare) com `TRUST_PROXY=1`, `FORCE_HTTPS=1` e `NODE_ENV=production`.
 - Defina `APP_SECRET` fora do servidor de arquivos e faça backup de `data/nexus.db`.
