@@ -95,16 +95,21 @@ function totpAt(secret, counter) {
   const code = ((h.readUInt32BE(o) & 0x7fffffff) % 1e6).toString().padStart(6, '0');
   return code;
 }
-// retorna o contador aceito (para impedir reuso) ou -1
+// retorna o contador aceito; -1 = código errado; -2 = código certo, mas já usado (anti-reuso)
 function verifyTotp(secret, code, lastCounter = -1) {
   if (!/^\d{6}$/.test(String(code || ''))) return -1;
   const now = Math.floor(Date.now() / 30000);
+  let reused = false;
   for (const c of [now, now - 1, now + 1]) {
-    if (c <= lastCounter) continue;
-    if (safeEqual(totpAt(secret, c), code)) return c;
+    if (!safeEqual(totpAt(secret, c), code)) continue;
+    if (c <= lastCounter) { reused = true; continue; }
+    return c;
   }
-  return -1;
+  return reused ? -2 : -1;
 }
+const totpError = c => c === -2
+  ? 'Esse código já foi usado. Espere o app mostrar o próximo (até 30 s) e digite o novo.'
+  : 'Código incorreto. Confira se a data e hora do celular estão automáticas.';
 const otpauthUri = (secret, account, issuer = 'NEXUS') =>
   `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(account)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`;
 function recoveryCodes(n = 8) {
@@ -227,7 +232,7 @@ function verifyGameSignature(req, rawBody, secret) {
 module.exports = {
   PROD, initKey, encrypt, decrypt, sha256, hmac, safeEqual, mask,
   hashPassword, checkPassword, passwordProblem,
-  newTotpSecret, verifyTotp, otpauthUri, recoveryCodes, totpAt,
+  newTotpSecret, verifyTotp, totpError, otpauthUri, recoveryCodes, totpAt,
   clientIp, isHttps, take, isBlocked, blockIp, blockedList, setOnBlock,
   csrfOk, securityHeaders, verifyGameSignature,
 };

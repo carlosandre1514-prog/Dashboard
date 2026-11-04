@@ -109,7 +109,7 @@ async function stepUp(req, admin, body) {
   }
   if (admin.totp_enabled) {
     const c = sec.verifyTotp(sec.decrypt(admin.totp_secret), str(body.totp, 6), admin.totp_last);
-    if (c < 0) { audit('admin', admin.id, 'stepup.failed_2fa', { ...ctxOf(req), severity: 'warning' }); throw new HttpError(403, 'Código de verificação inválido'); }
+    if (c < 0) { audit('admin', admin.id, 'stepup.failed_2fa', { ...ctxOf(req), severity: 'warning' }); throw new HttpError(403, sec.totpError(c)); }
     db.prepare('UPDATE admins SET totp_last = ? WHERE id = ?').run(c, admin.id);
   }
 }
@@ -308,10 +308,10 @@ route('POST', '/api/admin/login/mfa', async (req, res, { body }) => {
   const a = db.prepare('SELECT * FROM admins WHERE id = ?').get(p.id);
   lockoutCheck(a);
   const code = str(body.code, 20).toUpperCase();
-  let ok = false;
+  let ok = false, why = -1;
   if (/^\d{6}$/.test(code)) {
     const c = sec.verifyTotp(sec.decrypt(a.totp_secret), code, a.totp_last);
-    if (c >= 0) { ok = true; db.prepare('UPDATE admins SET totp_last = ? WHERE id = ?').run(c, a.id); }
+    if (c >= 0) { ok = true; db.prepare('UPDATE admins SET totp_last = ? WHERE id = ?').run(c, a.id); } else why = c;
   } else if (/^[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}$/.test(code)) {
     const list = JSON.parse(a.recovery_codes || '[]');
     const i = list.indexOf(sec.sha256(code));
@@ -321,7 +321,7 @@ route('POST', '/api/admin/login/mfa', async (req, res, { body }) => {
     if (++p.tries >= 5) mfaPending.delete(str(body.mfa_token, 100));
     registerFailure('admins', a);
     audit('admin', a.id, 'admin.2fa_failed', { ...ctxOf(req), severity: 'warning' });
-    throw new HttpError(401, 'Código inválido');
+    throw new HttpError(401, why === -2 ? sec.totpError(-2) : 'Código inválido');
   }
   mfaPending.delete(str(body.mfa_token, 100));
   return reply(200, { ok: true, is_admin: true }, { 'Set-Cookie': adminLoginCookie(req, a) });
