@@ -282,3 +282,20 @@ test('admin com sessão do painel expirada continua reconhecido (não aparece "s
   const r = await buyer('GET', '/api/auth/me');
   assert.equal(r.data.admin_eligible, false, 'jogador comum não é elegível');
 });
+
+test('dono que recria a conta no Firebase (novo uid, e-mail confirmado) continua admin', async () => {
+  const c = client();
+  const r = await c('POST', '/api/auth/session', { id_token: idToken({ email: OWNER, sub: 'uid-dono-novo', firebase: { sign_in_provider: 'google.com' } }) });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.is_admin, true);
+  assert.equal((await c('GET', '/api/auth/me')).data.admin_eligible, true);
+  const log = await c('GET', '/api/admin/audit');
+  assert.ok(log.data.rows.some(x => x.action === 'admin.uid_rebound'), 'troca fica registrada na auditoria');
+});
+
+test('mesmo e-mail NÃO confirmado não toma o lugar do admin', async () => {
+  const c = client();
+  const r = await c('POST', '/api/auth/session', { id_token: idToken({ email: OWNER, sub: 'uid-invasor', email_verified: false }) });
+  assert.equal(r.data.is_admin, false);
+  assert.equal((await c('GET', '/api/admin/me')).status, 401);
+});

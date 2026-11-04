@@ -1113,7 +1113,7 @@ function demoData() {
 // ---------------------------------------------------------------- Pagamentos (central de verificação)
 const SEC_LABEL = {
   'admin.login': 'Login no painel', 'admin.logout': 'Saída do painel', 'admin.login_failed': 'Falha de login no painel', 'admin.2fa_failed': 'Código 2FA incorreto', 'admin.created': 'Administrador ativado',
-  'admin.added': 'Administrador adicionado', 'admin.removed': 'Administrador removido', 'admin.uid_mismatch': 'Tentativa de login com conta trocada', '2fa.enabled': '2FA ativado', '2fa.disabled': '2FA desativado',
+  'admin.added': 'Administrador adicionado', 'admin.removed': 'Administrador removido', 'admin.uid_mismatch': 'Tentativa de login com conta trocada', 'admin.uid_rebound': 'Login do administrador revinculado (nova conta Firebase)', 'player.uid_rebound': 'Login do jogador revinculado', '2fa.enabled': '2FA ativado', '2fa.disabled': '2FA desativado',
   '2fa.recovery_used': 'Código de recuperação usado', 'stepup.failed': 'Confirmação de identidade falhou', 'stepup.failed_2fa': 'Confirmação 2FA falhou', 'sessions.revoked': 'Sessões encerradas',
   'payment.mismatch': 'Pagamento com valor/pedido divergente', 'payment.manual_confirm': 'Pagamento confirmado manualmente', 'payment.e2e_reuse': 'Comprovante Pix reutilizado', 'payment.chargeback': 'Contestação (chargeback)',
   'payment.refunded': 'Estorno no provedor', 'payment.verify_requested': 'Consulta de pagamento', 'payment.charge_failed': 'Falha ao gerar cobrança', 'webhook.rejected': 'Webhook com assinatura inválida', 'webhook.unknown_order': 'Webhook de pedido desconhecido',

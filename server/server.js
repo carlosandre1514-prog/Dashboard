@@ -249,9 +249,11 @@ route('POST', '/api/auth/session', async (req, res, { body }) => {
   if (!t.email) bad('Sua conta precisa ter um e-mail');
   let p = db.prepare('SELECT * FROM players WHERE firebase_uid = ?').get(t.uid);
   if (!p) {
-    p = db.prepare('SELECT * FROM players WHERE email = ? AND firebase_uid IS NULL').get(t.email);
-    if (p && t.email_verified) db.prepare('UPDATE players SET firebase_uid = ? WHERE id = ?').run(t.uid, p.id);
-    else {
+    p = db.prepare('SELECT * FROM players WHERE email = ?').get(t.email);
+    if (p && t.email_verified) {
+      if (p.firebase_uid && p.firebase_uid !== t.uid) audit('player', p.id, 'player.uid_rebound', { ...ctxOf(req), target: t.email, severity: 'warning', details: { provider: t.provider } });
+      db.prepare('UPDATE players SET firebase_uid = ? WHERE id = ?').run(t.uid, p.id);
+    } else {
       if (db.prepare('SELECT COUNT(*) n FROM players WHERE signup_ip = ? AND created_at > ?').get(req.ip, new Date(Date.now() - 3600000).toISOString()).n >= 5)
         throw new HttpError(429, 'Muitas contas criadas a partir desta rede. Tente mais tarde.');
       const name = str(body.name || t.name, 60);
@@ -281,10 +283,12 @@ route('POST', '/api/auth/session', async (req, res, { body }) => {
         const r = db.prepare("INSERT INTO admins(email, name, pass_hash, firebase_uid, role) VALUES (?,?,'',?,?)").run(t.email, t.name || t.email.split('@')[0], t.uid, isOwner(t.email) ? 'owner' : 'admin');
         a = db.prepare('SELECT * FROM admins WHERE id = ?').get(Number(r.lastInsertRowid));
         audit('admin', a.id, 'admin.created', { ...ctxOf(req), severity: 'warning', details: { email: t.email } });
-      } else if (a.firebase_uid && a.firebase_uid !== t.uid) {
-        audit('anon', null, 'admin.uid_mismatch', { ...ctxOf(req), target: t.email, severity: 'critical' });
-        throw new HttpError(403, 'Conta de administrador vinculada a outro login. Contate o dono do sistema.');
-      } else if (!a.firebase_uid) db.prepare('UPDATE admins SET firebase_uid = ? WHERE id = ?').run(t.uid, a.id);
+      } else if (a.firebase_uid !== t.uid) {
+        // novo login no Firebase para o mesmo e-mail CONFIRMADO (ex.: conta recriada pelo Google)
+        if (a.firebase_uid) audit('admin', a.id, 'admin.uid_rebound', { ...ctxOf(req), target: t.email, severity: 'critical', details: { provider: t.provider } });
+        db.prepare('UPDATE admins SET firebase_uid = ? WHERE id = ?').run(t.uid, a.id);
+        a.firebase_uid = t.uid;
+      }
       lockoutCheck(a);
       db.prepare('UPDATE admins SET login_provider = ? WHERE id = ?').run(t.provider || null, a.id);
       if (a.totp_enabled) {
