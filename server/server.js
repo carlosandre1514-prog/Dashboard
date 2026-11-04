@@ -1109,9 +1109,29 @@ server.headersTimeout = 15000;
 server.keepAliveTimeout = 5000;
 server.maxHeadersCount = 64;
 
+// Reset de emergência do 2FA: só quem controla as variáveis do servidor (painel do Render) consegue.
+// ADMIN_RESET_2FA=email-do-dono  → desativa o 2FA desse dono UMA vez (o mesmo valor não age de novo),
+// encerra as sessões do painel e registra alerta crítico. Depois, apague a variável.
+function emergencyReset2fa() {
+  const v = str(process.env.ADMIN_RESET_2FA, 200).toLowerCase();
+  if (!v) return null;
+  const mark = sec.sha256('reset2fa|' + v);
+  if (getSetting('reset_2fa_done') === mark) { console.log('[2FA] ADMIN_RESET_2FA já foi aplicado antes — apague essa variável no Render.'); return 'already'; }
+  if (!ownerEmails().includes(v)) { console.log('[2FA] ADMIN_RESET_2FA ignorado: o e-mail precisa estar em ADMIN_EMAILS.'); return 'not_owner'; }
+  const a = db.prepare('SELECT * FROM admins WHERE email = ?').get(v);
+  setSetting('reset_2fa_done', mark);
+  if (!a) return 'no_admin';
+  db.prepare('UPDATE admins SET totp_enabled = 0, totp_secret = NULL, recovery_codes = NULL, failed_logins = 0, locked_until = NULL WHERE id = ?').run(a.id);
+  db.prepare("DELETE FROM sessions WHERE kind = 'admin' AND subject_id = ?").run(a.id);
+  audit('system', null, '2fa.emergency_reset', { target: v, severity: 'critical', details: { via: 'variável ADMIN_RESET_2FA no servidor' } });
+  console.log(`[2FA] Verificação em duas etapas DESATIVADA para ${v}. Entre no painel, reative o 2FA e apague ADMIN_RESET_2FA no Render.`);
+  return 'reset';
+}
+
 function listen() {
   pay.startJobs();
   cloud.start(db, DB_FILE);
+  if (emergencyReset2fa() === 'reset') cloud.soon(); // salva o reset no backup na nuvem
   // limpeza periódica de sessões vencidas
   setInterval(() => db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now()), 3600000).unref();
   // desligamento gracioso (Render/hospedagens enviam SIGTERM): salva a última cópia antes de sair
@@ -1135,4 +1155,4 @@ function listen() {
   });
 }
 if (require.main === module) listen();
-module.exports = { server, listen };
+module.exports = { server, listen, emergencyReset2fa };

@@ -299,3 +299,18 @@ test('mesmo e-mail NÃO confirmado não toma o lugar do admin', async () => {
   assert.equal(r.data.is_admin, false);
   assert.equal((await c('GET', '/api/admin/me')).status, 401);
 });
+
+test('reset de emergência do 2FA: só para dono, uma vez só, e fica na auditoria', async () => {
+  const { emergencyReset2fa } = require('../server/server.js');
+  const db = require('../server/db').db;
+  db.prepare("UPDATE admins SET totp_enabled = 1, totp_secret = 'x' WHERE email = ?").run(OWNER);
+  process.env.ADMIN_RESET_2FA = 'jogador@mail.com';
+  assert.equal(emergencyReset2fa(), 'not_owner');
+  process.env.ADMIN_RESET_2FA = OWNER;
+  assert.equal(emergencyReset2fa(), 'reset');
+  assert.equal(db.prepare('SELECT totp_enabled FROM admins WHERE email = ?').get(OWNER).totp_enabled, 0);
+  db.prepare("UPDATE admins SET totp_enabled = 1 WHERE email = ?").run(OWNER);
+  assert.equal(emergencyReset2fa(), 'already', 'o mesmo valor não desativa de novo depois de reiniciar');
+  assert.equal(db.prepare('SELECT totp_enabled FROM admins WHERE email = ?').get(OWNER).totp_enabled, 1);
+  delete process.env.ADMIN_RESET_2FA;
+});
