@@ -346,21 +346,34 @@ function loginDialog(after, title = 'Entrar') {
   NXLogin($('#loginBox', ov), { onDone: async r => { closeLayer(); await loadMe(); header(); toast('Bem-vindo!', 'ok'); if (r.mfa_required) return mfaDialog(r.mfa_token); if (r.is_admin) toast('Acesso de administrador liberado'); after && after(); } });
 }
 function verifyDialog(after) {
-  overlay(`<div class="dialog" style="max-width:460px"><div class="dialog-h"><h3>Confirme seu e-mail</h3><button class="btn ghost icon sm x" data-x>${icon('close', 16)}</button></div>
+  overlay(`<div class="dialog" style="max-width:480px"><div class="dialog-h"><h3>Confirme seu e-mail</h3><button class="btn ghost icon sm x" data-x>${icon('close', 16)}</button></div>
     <div class="dialog-b" style="display:flex;flex-direction:column;gap:14px">
-      <p class="t2">Por segurança, compras só são liberadas para contas com e-mail confirmado. Enviamos um link para <b style="color:var(--text)">${esc(S.me.email || '')}</b>.</p>
-      <div class="nxl-msg" id="vMsg"></div>
+      <p class="t2">Por segurança, compras só são liberadas para contas com e-mail confirmado. O link vai para <b style="color:var(--text)">${esc(S.me.email || '')}</b>.</p>
+      <ul class="vtips"><li>Remetente: <b>noreply@…firebaseapp.com</b>, assunto parecido com "Verify your email" / "Confirme seu e-mail".</li>
+        <li>No Gmail, olhe também as abas <b>Promoções</b>, <b>Atualizações</b> e o <b>Spam</b>. Pode levar 1–2 minutos.</li>
+        <li>Clique no link do e-mail: você volta para cá e a confirmação é feita sozinha.</li></ul>
+      <div class="nxl-msg" id="vMsg" role="alert"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" id="vDone">${icon('check', 15)}Já confirmei</button><button class="btn" id="vSend">Reenviar e-mail</button></div>
+      <p class="muted" style="font-size:12.5px">Não chegou mesmo? Entre com <b style="color:var(--text)">Google</b>: contas Google já vêm com o e-mail confirmado.</p>
     </div></div>`);
-  $('#vSend').onclick = async () => { try { await (await NXWhenAuth()).resendVerification(); $('#vMsg').className = 'nxl-msg ok'; $('#vMsg').textContent = 'E-mail reenviado. Confira também a caixa de spam.'; } catch (e) { $('#vMsg').className = 'nxl-msg err'; $('#vMsg').textContent = NXAuth.message(e); } };
+  const msg = (t, ok) => { $('#vMsg').className = 'nxl-msg ' + (ok ? 'ok' : 'err'); $('#vMsg').textContent = t; };
+  $('#vSend').onclick = async () => {
+    const b = $('#vSend'); b.disabled = true;
+    try { const to = await (await NXWhenAuth()).resendVerification(); msg(`E-mail enviado para ${to}. Aguarde 1–2 minutos e olhe todas as abas.`, true); }
+    catch (e) {
+      msg(NXAuth.message(e));
+      if (e.code === 'nx/no-user') { closeLayer(); return loginDialog(() => verifyDialog(after), 'Entre de novo para reenviar'); }
+    }
+    finally { setTimeout(() => { const x = $('#vSend'); if (x) x.disabled = false; }, 30000); } // evita bloqueio por excesso
+  };
   $('#vDone').onclick = async () => {
     try {
       const r = await (await NXWhenAuth()).refreshVerification();
       if (!r) { closeLayer(); return loginDialog(after, 'Entre novamente'); }
       await loadMe(); header();
       if (S.me?.email_verified) { closeLayer(); toast('E-mail confirmado!', 'ok'); after && after(); }
-      else { $('#vMsg').className = 'nxl-msg err'; $('#vMsg').textContent = 'Ainda não confirmado. Clique no link do e-mail e tente de novo.'; }
-    } catch (e) { $('#vMsg').className = 'nxl-msg err'; $('#vMsg').textContent = NXAuth.message(e); }
+      else msg('Ainda não confirmado. Clique no link do e-mail e tente de novo.');
+    } catch (e) { msg(NXAuth.message(e)); }
   };
 }
 function checkout(slug) {
@@ -453,6 +466,8 @@ async function account() {
         <ul><li>${icon('coin', 16)}Compre moedas, skins e passes de todos os jogos</li><li>${icon('shield', 16)}Pagamento verificado e histórico de pedidos</li><li>${icon('bolt', 16)}Entrega automática na conta do jogo</li></ul></div></div></section>`;
     NXLogin($('#loginBox'), { title: 'Sua conta NEXUS', kicker: 'Conta', subtitle: 'Entre ou crie sua conta para comprar e acompanhar pedidos.', onDone: async r => {
       await loadMe(); header();
+      if (r.verify_error) toast('Conta criada, mas o e-mail de confirmação falhou: ' + r.verify_error, 'err');
+      else if (r.verify_sent) toast('Conta criada! Enviamos o link de confirmação para o seu e-mail.', 'ok');
       if (r.mfa_required) return mfaDialog(r.mfa_token);
       if (r.is_admin) { toast('Acesso de administrador liberado', 'ok'); }
       account();
@@ -506,7 +521,13 @@ function notFound() {
   if (page === 'home') { track('page_view'); await home(); }
   else if (page === 'game') await gamePage();
   else if (page === 'market') await market();
-  else if (page === 'account') await account();
+  else if (page === 'account') {
+    if (new URLSearchParams(location.search).get('verificado') === '1') {
+      history.replaceState(null, '', '/conta');
+      try { const A = await NXWhenAuth(); const r = await A.refreshVerification(); if (r) { await loadMe(); header(); if (S.me?.email_verified) toast('E-mail confirmado! Compras liberadas.', 'ok'); } } catch { }
+    }
+    await account();
+  }
   else notFound();
   if (location.hash) { try { $(location.hash)?.scrollIntoView(); } catch { } }
 })();

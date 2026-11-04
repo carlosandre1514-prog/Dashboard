@@ -31,6 +31,9 @@ const MSG = {
   'auth/user-disabled': 'Esta conta foi desativada.',
   'auth/missing-password': 'Digite sua senha.',
   'auth/user-mismatch': 'Use a mesma conta com que você entrou.',
+  'auth/unauthorized-continue-uri': 'Domínio do site não autorizado no Firebase (Authentication → Settings → Authorized domains).',
+  'auth/invalid-continue-uri': 'Endereço de retorno inválido para o e-mail de confirmação.',
+  'nx/no-user': 'Sua sessão de login expirou neste navegador. Entre de novo com e-mail e senha para reenviar.',
 };
 const message = e => MSG[e?.code] || e?.message || 'Não foi possível concluir. Tente novamente.';
 
@@ -45,6 +48,9 @@ try {
 const ready = new Promise(res => { if (!auth) return res(null); const off = onAuthStateChanged(auth, u => { off(); res(u); }); });
 const need = () => { if (!auth) throw new Error('Serviço de login indisponível: ' + (initError?.message || '')); };
 const session = async (user, name) => post('/api/auth/session', { id_token: await user.getIdToken(true), name, visitor });
+// o link do e-mail volta para o site, que confirma sozinho
+const verifyLink = () => ({ url: location.origin + '/conta?verificado=1', handleCodeInApp: false });
+async function sendVerify(user) { await sendEmailVerification(user, verifyLink()); }
 
 window.NXAuth = {
   message,
@@ -56,14 +62,21 @@ window.NXAuth = {
     need();
     const c = await createUserWithEmailAndPassword(auth, email.trim(), password);
     if (name) await updateProfile(c.user, { displayName: name });
-    await sendEmailVerification(c.user).catch(() => { });
-    return session(c.user, name);
+    let verify_error = null;
+    try { await sendVerify(c.user); } catch (e) { verify_error = message(e); }
+    const r = await session(c.user, name);
+    return { ...r, verify_sent: !verify_error, verify_error };
   },
   async google() { need(); const c = await signInWithPopup(auth, new GoogleAuthProvider()); return session(c.user); },
   async reset(email) { need(); await sendPasswordResetEmail(auth, email.trim()); },
-  async resendVerification() { need(); if (auth.currentUser) await sendEmailVerification(auth.currentUser); },
+  async resendVerification() {
+    need(); await ready;
+    if (!auth.currentUser) throw Object.assign(new Error('sem login'), { code: 'nx/no-user' });
+    await sendVerify(auth.currentUser);
+    return auth.currentUser.email;
+  },
   // depois que o usuário clica no link do e-mail: recarrega e renova o token para o servidor ver "verificado"
-  async refreshVerification() { need(); if (!auth.currentUser) return null; await reload(auth.currentUser); return session(auth.currentUser); },
+  async refreshVerification() { need(); await ready; if (!auth.currentUser) return null; await reload(auth.currentUser); return session(auth.currentUser); },
   // reconecta ao servidor usando o login do Firebase guardado no navegador (sem digitar senha)
   async resume() { need(); await ready; if (!auth.currentUser) return null; return session(auth.currentUser); },
   async mfa(mfa_token, code, remember = true) { return post('/api/admin/login/mfa', { mfa_token, code, remember: !!remember }); },
