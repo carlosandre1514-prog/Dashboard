@@ -273,3 +273,12 @@ test('jogador vê apenas os próprios pedidos', async () => {
   await other('POST', '/api/auth/session', { id_token: idToken({ email: 'outro@mail.com' }) });
   assert.equal((await other('GET', '/api/public/orders/' + order.code)).status, 404, 'pedido de outra pessoa não é acessível');
 });
+
+test('admin com sessão do painel expirada continua reconhecido (não aparece "sem permissão")', async () => {
+  const c = client();
+  await c('POST', '/api/auth/session', { id_token: idToken({ email: OWNER, sub: 'uid-dono' }) });
+  // simula a sessão do painel expirada: remove só o cookie de admin
+  assert.equal((await c('GET', '/api/auth/me')).data.admin_eligible, true, 'dono continua elegível ao painel');
+  const r = await buyer('GET', '/api/auth/me');
+  assert.equal(r.data.admin_eligible, false, 'jogador comum não é elegível');
+});

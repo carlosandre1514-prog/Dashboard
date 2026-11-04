@@ -1320,13 +1320,14 @@ async function showAuth(view = 'login', data = {}) {
   auth.innerHTML = AUTH_ART() + '<div class="auth-form"><div class="auth-box" id="authBox"></div></div>';
   const box = $('#authBox');
   if (view === 'login') {
-    NXLogin(box, { title: 'Entrar no painel', kicker: 'Acesso restrito', subtitle: 'Use o e-mail cadastrado como administrador.', onDone: r => {
+    NXLogin(box, { title: 'Entrar no painel', kicker: data.notice ? 'Sessão expirada' : 'Acesso restrito',
+      subtitle: data.notice ? 'Por segurança, o painel desconecta após 30 min sem uso. Entre de novo.' : 'Use o e-mail cadastrado como administrador.', onDone: r => {
       if (r.mfa_required) return showAuth('mfa', r);
       if (r.is_admin) return boot();
       showAuth('denied', r);
     } });
   } else if (view === 'mfa') {
-    box.innerHTML = `<form class="nxl" novalidate><div class="nxl-h"><span class="label">Etapa 2 de 2</span><h2>Verificação em duas etapas</h2><p>Digite o código de 6 dígitos do seu app autenticador, ou um código de recuperação.</p></div>
+    box.innerHTML = `<form class="nxl" novalidate><div class="nxl-h"><span class="label">${data.expired ? 'Sessão do painel expirada' : 'Etapa 2 de 2'}</span><h2>Verificação em duas etapas</h2><p>${data.expired ? 'Você ficou um tempo sem usar o painel. ' : ''}Digite o código de 6 dígitos do seu app autenticador, ou um código de recuperação.</p></div>
       <input class="input mono" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="14" style="height:52px;font-size:22px;letter-spacing:.35em;text-align:center">
       <div class="nxl-msg err" id="mErr"></div><button class="btn primary lg">Verificar</button><a href="#" class="nxl-link" id="back">Usar outra conta</a></form>`;
     $('form', box).onsubmit = async e => { e.preventDefault(); try { await NXAuth.mfa(data.mfa_token, formData(e.target).code); boot(); } catch (err) { $('#mErr').textContent = err.message; } };
@@ -1340,11 +1341,29 @@ async function showAuth(view = 'login', data = {}) {
   }
 }
 
+// a sessão do painel expira após inatividade; a pessoa continua logada no Firebase → reconecta
+let resuming = false;
+async function resumeAdmin() {
+  if (resuming) return showAuth('login', { notice: true });
+  resuming = true;
+  try {
+    const A = await NXWhenAuth();
+    const r = await A.resume();
+    if (r?.mfa_required) return showAuth('mfa', { ...r, expired: true });
+    if (r?.is_admin) return boot();
+  } catch { }
+  finally { setTimeout(() => { resuming = false; }, 3000); }
+  showAuth('login', { notice: true });
+}
 async function boot() {
   try { state.me = await api('GET', '/api/admin/me'); }
   catch {
     state.me = null;
-    try { const m = await api('GET', '/api/auth/me'); if (m.player) return showAuth('denied'); } catch { }
+    try {
+      const m = await api('GET', '/api/auth/me');
+      if (m.player && m.admin_eligible) return resumeAdmin();
+      if (m.player) return showAuth('denied');
+    } catch { }
     return showAuth();
   }
   $('#auth').classList.add('hidden');

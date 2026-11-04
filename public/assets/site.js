@@ -41,7 +41,7 @@ const S = { me: null, isAdmin: false, links: [], orders: [], info: { store_name:
 // ============================================================ dados
 async function loadMe() {
   const r = await api('GET', '/api/auth/me');
-  S.me = r.player; S.isAdmin = r.is_admin;
+  S.me = r.player; S.isAdmin = r.is_admin || r.admin_eligible;
   if (S.me) { try { const m = await api('GET', '/api/public/me'); S.links = m.links || []; S.orders = m.orders || []; } catch { } }
 }
 async function loadMarket() { if (!S.market) S.market = await api('GET', '/api/public/market'); return S.market; }
@@ -323,7 +323,7 @@ async function startCheckout(slug) {
 }
 function loginDialog(after, title = 'Entrar') {
   const ov = overlay(`<div class="dialog" style="max-width:420px"><div class="dialog-h"><h3>${esc(title)}</h3><button class="btn ghost icon sm x" data-x aria-label="Fechar">${icon('close', 16)}</button></div><div class="dialog-b" id="loginBox"></div></div>`);
-  NXLogin($('#loginBox', ov), { onDone: async r => { closeLayer(); await loadMe(); header(); toast('Bem-vindo!', 'ok'); if (r.is_admin) toast('Acesso de administrador liberado'); after && after(); } });
+  NXLogin($('#loginBox', ov), { onDone: async r => { closeLayer(); await loadMe(); header(); toast('Bem-vindo!', 'ok'); if (r.mfa_required) return mfaDialog(r.mfa_token); if (r.is_admin) toast('Acesso de administrador liberado'); after && after(); } });
 }
 function verifyDialog(after) {
   overlay(`<div class="dialog" style="max-width:460px"><div class="dialog-h"><h3>Confirme seu e-mail</h3><button class="btn ghost icon sm x" data-x>${icon('close', 16)}</button></div>

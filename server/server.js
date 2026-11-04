@@ -342,7 +342,8 @@ route('GET', '/api/auth/me', async req => {
   const player = ps && db.prepare('SELECT id, username, display_name, email, email_verified, created_at FROM players WHERE id = ? AND blocked = 0').get(ps.id);
   const as = sessionOf(req, 'admin');
   const admin = as && db.prepare('SELECT id, email, name, role, totp_enabled FROM admins WHERE id = ?').get(as.id);
-  return { player: player ? { ...player, email_verified: !!player.email_verified } : null, is_admin: !!admin && adminEmails().has(admin.email) };
+  const eligible = !!player && !!player.email_verified && !!player.email && adminEmails().has(String(player.email).toLowerCase());
+  return { player: player ? { ...player, email_verified: !!player.email_verified } : null, is_admin: !!admin && adminEmails().has(admin.email), admin_eligible: eligible };
 });
 route('GET', '/api/admin/me', async req => {
   const a = requireAdmin(req);
