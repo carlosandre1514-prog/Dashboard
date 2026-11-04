@@ -478,11 +478,12 @@ async function account() {
 function mfaDialog(token) {
   const ov = overlay(`<form class="dialog" style="max-width:400px" novalidate><div class="dialog-h"><h3>Verificação em duas etapas</h3><button type="button" class="btn ghost icon sm x" data-x>${icon('close', 16)}</button></div>
     <div class="dialog-b" style="display:flex;flex-direction:column;gap:14px"><p class="t2" style="font-size:13px">Sua conta de administrador está protegida. Digite o código de 6 dígitos do app autenticador (ou um código de recuperação).</p>
-    <input class="input mono" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="14" style="font-size:20px;letter-spacing:.3em;text-align:center"><div class="nxl-msg err" id="mErr"></div>
+    <input class="input mono" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="14" style="font-size:20px;letter-spacing:.3em;text-align:center">
+    <label class="switch"><input type="checkbox" name="remember" checked> Lembrar este aparelho por 30 dias</label><div class="nxl-msg err" id="mErr"></div>
     <button class="btn primary lg">Confirmar</button></div></form>`);
   $('form', ov).onsubmit = async e => {
     e.preventDefault();
-    try { await NXAuth.mfa(token, new FormData(e.target).get('code')); closeLayer(); await loadMe(); header(); account(); toast('Acesso de administrador liberado', 'ok'); }
+    try { const fd = new FormData(e.target); await NXAuth.mfa(token, fd.get('code'), !!fd.get('remember')); closeLayer(); await loadMe(); header(); account(); toast('Acesso de administrador liberado', 'ok'); }
     catch (err) { $('#mErr').textContent = err.message; }
   };
   $('input', ov).focus();

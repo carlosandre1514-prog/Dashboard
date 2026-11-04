@@ -66,7 +66,7 @@ window.NXAuth = {
   async refreshVerification() { need(); if (!auth.currentUser) return null; await reload(auth.currentUser); return session(auth.currentUser); },
   // reconecta ao servidor usando o login do Firebase guardado no navegador (sem digitar senha)
   async resume() { need(); await ready; if (!auth.currentUser) return null; return session(auth.currentUser); },
-  async mfa(mfa_token, code) { return post('/api/admin/login/mfa', { mfa_token, code }); },
+  async mfa(mfa_token, code, remember = true) { return post('/api/admin/login/mfa', { mfa_token, code, remember: !!remember }); },
   // confirmação de identidade para ações sensíveis: devolve um token recém-emitido
   async freshToken({ email, password, useGoogle } = {}) {
     need();

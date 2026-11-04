@@ -314,3 +314,34 @@ test('reset de emergência do 2FA: só para dono, uma vez só, e fica na auditor
   assert.equal(db.prepare('SELECT totp_enabled FROM admins WHERE email = ?').get(OWNER).totp_enabled, 1);
   delete process.env.ADMIN_RESET_2FA;
 });
+
+test('perfil recriado sem e-mail volta a ser reconhecido como admin', async () => {
+  const db = require('../server/db').db;
+  const c = client();
+  await c('POST', '/api/auth/session', { id_token: idToken({ email: OWNER, sub: 'uid-dono-3' }) });
+  db.prepare("UPDATE players SET email = NULL WHERE firebase_uid = 'uid-dono-3'").run(); // estado do defeito
+  const c2 = client();
+  await c2('POST', '/api/auth/session', { id_token: idToken({ email: OWNER, sub: 'uid-dono-3' }) });
+  assert.equal(db.prepare("SELECT email FROM players WHERE firebase_uid = 'uid-dono-3'").get().email, OWNER);
+  assert.equal((await c2('GET', '/api/auth/me')).data.admin_eligible, true);
+});
+
+test('lembrar aparelho: depois do 2FA, o mesmo aparelho entra só com o login', async () => {
+  const sec = require('../server/security');
+  const db = require('../server/db').db;
+  const secret = sec.newTotpSecret();
+  db.prepare('UPDATE admins SET totp_enabled = 1, totp_secret = ?, totp_last = -1, recovery_codes = NULL WHERE email = ?').run(sec.encrypt(secret), OWNER);
+  const c = client();
+  const r1 = await c('POST', '/api/auth/session', { id_token: idToken({ email: OWNER, sub: 'uid-dono-3' }) });
+  assert.equal(r1.data.mfa_required, true);
+  const code = sec.totpAt(secret, Math.floor(Date.now() / 30000));
+  assert.equal((await c('POST', '/api/admin/login/mfa', { mfa_token: r1.data.mfa_token, code, remember: true })).status, 200);
+  await c('POST', '/api/auth/logout');
+  const r2 = await c('POST', '/api/auth/session', { id_token: idToken({ email: OWNER, sub: 'uid-dono-3' }) });
+  assert.equal(r2.data.is_admin, true, 'aparelho lembrado não pede o código');
+  assert.ok(!r2.data.mfa_required);
+  // outro aparelho continua pedindo
+  const r3 = await client()('POST', '/api/auth/session', { id_token: idToken({ email: OWNER, sub: 'uid-dono-3' }) });
+  assert.equal(r3.data.mfa_required, true);
+  db.prepare('UPDATE admins SET totp_enabled = 0 WHERE email = ?').run(OWNER);
+});

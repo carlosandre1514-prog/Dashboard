@@ -108,10 +108,21 @@ async function stepUp(req, admin, body) {
     throw new HttpError(403, 'Confirme sua identidade novamente (senha ou Google) para continuar');
   }
   if (admin.totp_enabled) {
-    if (!str(body.totp, 6)) throw new HttpError(403, 'Digite o código de 6 dígitos do app autenticador');
-    const c = sec.verifyTotp(sec.decrypt(admin.totp_secret), str(body.totp, 6), admin.totp_last);
-    if (c < 0) { audit('admin', admin.id, 'stepup.failed_2fa', { ...ctxOf(req), severity: 'warning' }); throw new HttpError(403, sec.totpError(c)); }
-    db.prepare('UPDATE admins SET totp_last = ? WHERE id = ?').run(c, admin.id);
+    const code = str(body.totp, 20).toUpperCase();
+    if (!code) throw new HttpError(403, 'Digite o código de 6 dígitos do app autenticador (ou um código de recuperação)');
+    if (/^[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}$/.test(code)) {
+      // código de recuperação também confirma (serve para trocar o 2FA de celular sem o aparelho antigo)
+      const list = JSON.parse(admin.recovery_codes || '[]');
+      const i = list.indexOf(sec.sha256(code));
+      if (i < 0) { audit('admin', admin.id, 'stepup.failed_2fa', { ...ctxOf(req), severity: 'warning' }); throw new HttpError(403, 'Código de recuperação inválido ou já usado'); }
+      list.splice(i, 1);
+      db.prepare('UPDATE admins SET recovery_codes = ? WHERE id = ?').run(JSON.stringify(list), admin.id);
+      audit('admin', admin.id, '2fa.recovery_used', { ...ctxOf(req), severity: 'warning', details: { remaining: list.length, stepup: true } });
+    } else {
+      const c = sec.verifyTotp(sec.decrypt(admin.totp_secret), code, admin.totp_last);
+      if (c < 0) { audit('admin', admin.id, 'stepup.failed_2fa', { ...ctxOf(req), severity: 'warning' }); throw new HttpError(403, sec.totpError(c)); }
+      db.prepare('UPDATE admins SET totp_last = ? WHERE id = ?').run(c, admin.id);
+    }
   }
 }
 
@@ -270,6 +281,12 @@ route('POST', '/api/auth/session', async (req, res, { body }) => {
       track({ type: 'signup', player_id: p.id, visitor_id: body.visitor, platform: 'web', country: 'BR' });
     }
   }
+  if (t.email_verified && p.email !== t.email) {
+    const other = db.prepare('SELECT id, email_verified, firebase_uid FROM players WHERE email = ? AND id != ?').get(t.email, p.id);
+    if (other) db.prepare('UPDATE players SET email = NULL WHERE id = ?').run(other.id); // o e-mail é de quem o confirmou agora
+    db.prepare('UPDATE players SET email = ? WHERE id = ?').run(t.email, p.id);
+    p.email = t.email;
+  }
   if (p.blocked) { audit('player', p.id, 'player.blocked_login', { ...ctxOf(req), severity: 'warning' }); throw new HttpError(403, 'Conta suspensa. Fale com o suporte.'); }
   db.prepare('UPDATE players SET email_verified = ?, last_seen_at = ?, last_ip = ? WHERE id = ?').run(t.email_verified ? 1 : 0, now(), req.ip, p.id);
   const cookiesOut = [cookie(req, 'nx_player', createSession(req, 'player', p.id), PLAYER_DAYS * 86400)];
@@ -291,7 +308,9 @@ route('POST', '/api/auth/session', async (req, res, { body }) => {
       }
       lockoutCheck(a);
       db.prepare('UPDATE admins SET login_provider = ? WHERE id = ?').run(t.provider || null, a.id);
-      if (a.totp_enabled) {
+      const trusted = a.totp_enabled && trustedDevice(req, a.id);
+      if (trusted) audit('admin', a.id, 'admin.login_trusted_device', ctxOf(req));
+      if (a.totp_enabled && !trusted) {
         const mt = newToken();
         mfaPending.set(mt, { id: a.id, exp: Date.now() + 5 * 60000, tries: 0 });
         Object.assign(out, { mfa_required: true, mfa_token: mt });
@@ -303,6 +322,21 @@ route('POST', '/api/auth/session', async (req, res, { body }) => {
   }
   return reply(200, out, { 'Set-Cookie': cookiesOut });
 }, { limit: 'auth', csrf: true });
+// "Lembrar este aparelho por 30 dias": cookie próprio (HttpOnly, Strict), só o hash fica no banco
+const TRUST_DAYS = 30;
+function trustedDevice(req, adminId) {
+  const t = cookies(req).nx_trust;
+  if (!t || t.length > 100) return false;
+  const row = db.prepare('SELECT * FROM trusted_devices WHERE token_hash = ?').get(sec.sha256(t));
+  return !!row && row.admin_id === adminId && row.expires_at > now();
+}
+function trustCookie(req, adminId) {
+  const t = newToken();
+  db.prepare('INSERT INTO trusted_devices(token_hash, admin_id, created_at, expires_at, ip, user_agent) VALUES (?,?,?,?,?,?)')
+    .run(sec.sha256(t), adminId, now(), new Date(Date.now() + TRUST_DAYS * 86400000).toISOString(), req.ip, str(req.headers['user-agent'], 200));
+  return cookie(req, 'nx_trust', t, TRUST_DAYS * 86400, true);
+}
+const forgetDevices = adminId => db.prepare('DELETE FROM trusted_devices WHERE admin_id = ?').run(adminId);
 function adminLoginCookie(req, a) {
   db.prepare('UPDATE admins SET failed_logins = 0, locked_until = NULL, last_login_at = ?, last_login_ip = ? WHERE id = ?').run(now(), req.ip, a.id);
   audit('admin', a.id, 'admin.login', ctxOf(req));
@@ -330,7 +364,9 @@ route('POST', '/api/admin/login/mfa', async (req, res, { body }) => {
     throw new HttpError(401, why === -2 ? sec.totpError(-2) : 'Código inválido');
   }
   mfaPending.delete(str(body.mfa_token, 100));
-  return reply(200, { ok: true, is_admin: true }, { 'Set-Cookie': adminLoginCookie(req, a) });
+  const out = [adminLoginCookie(req, a)];
+  if (body.remember) { out.push(trustCookie(req, a.id)); audit('admin', a.id, 'admin.device_trusted', { ...ctxOf(req), severity: 'warning', details: { days: TRUST_DAYS } }); }
+  return reply(200, { ok: true, is_admin: true }, { 'Set-Cookie': out });
 }, { limit: 'auth', csrf: true });
 setInterval(() => { for (const [k, v] of mfaPending) if (v.exp < Date.now()) mfaPending.delete(k); }, 60000).unref();
 
@@ -346,7 +382,12 @@ route('GET', '/api/auth/me', async req => {
   const player = ps && db.prepare('SELECT id, username, display_name, email, email_verified, created_at FROM players WHERE id = ? AND blocked = 0').get(ps.id);
   const as = sessionOf(req, 'admin');
   const admin = as && db.prepare('SELECT id, email, name, role, totp_enabled FROM admins WHERE id = ?').get(as.id);
-  const eligible = !!player && !!player.email_verified && !!player.email && adminEmails().has(String(player.email).toLowerCase());
+  let eligible = !!player && !!player.email_verified && !!player.email && adminEmails().has(String(player.email).toLowerCase());
+  if (!eligible && player) {
+    const fu = db.prepare('SELECT firebase_uid FROM players WHERE id = ?').get(player.id)?.firebase_uid;
+    const ad = fu && db.prepare('SELECT email FROM admins WHERE firebase_uid = ?').get(fu);
+    eligible = !!ad && adminEmails().has(ad.email);
+  }
   return { player: player ? { ...player, email_verified: !!player.email_verified } : null, is_admin: !!admin && adminEmails().has(admin.email), admin_eligible: eligible };
 });
 route('GET', '/api/admin/me', async req => {
@@ -402,6 +443,7 @@ route('POST', '/api/admin/2fa/disable', async (req, res, { body }) => {
   const a = requireAdmin(req);
   await stepUp(req, a, body);
   db.prepare('UPDATE admins SET totp_enabled = 0, totp_secret = NULL, recovery_codes = NULL WHERE id = ?').run(a.id);
+  forgetDevices(a.id);
   audit('admin', a.id, '2fa.disabled', { ...ctxOf(req), severity: 'critical' });
   return { ok: true };
 }, { csrf: true, limit: 'sensitive' });
@@ -433,6 +475,7 @@ route('GET', '/api/admin/security', async req => {
       FROM audit_log WHERE at > ?`).get(new Date(Date.now() - 7 * 86400000).toISOString()),
     review_count: db.prepare('SELECT COUNT(*) n FROM orders WHERE review = 1 AND status IN (\'paid\',\'pending\')').get().n,
     totp_enabled: !!a.totp_enabled,
+    trusted_devices: db.prepare('SELECT created_at, expires_at, ip, user_agent FROM trusted_devices WHERE admin_id = ? AND expires_at > ? ORDER BY created_at DESC').all(a.id, now()),
     recovery_left: JSON.parse(a.recovery_codes || '[]').length,
   };
 });
@@ -448,7 +491,7 @@ route('GET', '/api/admin/audit', async (req, res, { query }) => {
 });
 route('POST', '/api/admin/sessions/revoke', async (req, res, { body }) => {
   const a = requireAdmin(req);
-  if (body.all) db.prepare("DELETE FROM sessions WHERE kind = 'admin' AND subject_id = ? AND token_hash != ?").run(a.id, a.session);
+  if (body.all) { db.prepare("DELETE FROM sessions WHERE kind = 'admin' AND subject_id = ? AND token_hash != ?").run(a.id, a.session); forgetDevices(a.id); }
   else db.prepare("DELETE FROM sessions WHERE kind = 'admin' AND subject_id = ? AND substr(token_hash, 1, 16) = ? AND token_hash != ?").run(a.id, str(body.id, 16), a.session);
   audit('admin', a.id, 'sessions.revoked', { ...ctxOf(req), severity: 'warning', details: { all: !!body.all } });
   return { ok: true };
@@ -1123,6 +1166,7 @@ function emergencyReset2fa() {
   if (!a) return 'no_admin';
   db.prepare('UPDATE admins SET totp_enabled = 0, totp_secret = NULL, recovery_codes = NULL, failed_logins = 0, locked_until = NULL WHERE id = ?').run(a.id);
   db.prepare("DELETE FROM sessions WHERE kind = 'admin' AND subject_id = ?").run(a.id);
+  forgetDevices(a.id);
   audit('system', null, '2fa.emergency_reset', { target: v, severity: 'critical', details: { via: 'variável ADMIN_RESET_2FA no servidor' } });
   console.log(`[2FA] Verificação em duas etapas DESATIVADA para ${v}. Entre no painel, reative o 2FA e apague ADMIN_RESET_2FA no Render.`);
   return 'reset';

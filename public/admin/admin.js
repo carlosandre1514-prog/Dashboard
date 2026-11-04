@@ -134,7 +134,7 @@ function stepUpDialog({ title, text, action = 'Confirmar', danger = false, field
     <div class="dialog-b" style="display:flex;flex-direction:column;gap:14px">
       ${text ? `<p class="t2" style="font-size:13.5px">${esc(text)}</p>` : ''}${fields}
       <div class="stepup"><span class="label">Confirme que é você</span>
-        ${totp ? `<label class="field"><span>${google ? '1. ' : ''}Código de 6 dígitos do app autenticador</span><input class="input mono" name="totp" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="000000" style="letter-spacing:.3em;font-size:18px"><small>Use um código novo — cada código vale uma vez.</small></label>` : ''}
+        ${totp ? `<label class="field"><span>${google ? '1. ' : ''}Código de 6 dígitos do app autenticador</span><input class="input mono" name="totp" maxlength="14" autocomplete="one-time-code" placeholder="000000" style="letter-spacing:.3em;font-size:18px"><small>Use um código novo do app — ou um código de recuperação (XXXX-XXXX-XXXX).</small></label>` : ''}
         ${google
           ? `<p class="t2" style="font-size:12.5px">${totp ? '2. ' : ''}Sua conta entra pelo Google. Confirme na janela do Google com a conta <b style="color:var(--text)">${esc(state.me.email)}</b>.</p>`
           : `<label class="field"><span>Senha da conta ${esc(state.me.email)}</span><input class="input" type="password" name="password" autocomplete="current-password"></label>`}
@@ -150,7 +150,7 @@ function stepUpDialog({ title, text, action = 'Confirmar', danger = false, field
   const err = m => { $('#suErr').textContent = m; };
   const go = async useGoogle => {
     const d = formData(form);
-    if (totp && !/^\d{6}$/.test(d.totp || '')) { err('Digite o código de 6 dígitos que aparece agora no app autenticador.'); $('[name=totp]', form).focus(); return; }
+    if (totp && !/^(\d{6}|[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4})$/.test((d.totp || '').trim())) { err('Digite o código de 6 dígitos do app autenticador, ou um código de recuperação.'); $('[name=totp]', form).focus(); return; }
     if (!useGoogle && !d.password) { err('Digite sua senha.'); return; }
     err('');
     $$('button', form).forEach(b => b.disabled = true);
@@ -1114,7 +1114,7 @@ function demoData() {
 const SEC_LABEL = {
   'admin.login': 'Login no painel', 'admin.logout': 'Saída do painel', 'admin.login_failed': 'Falha de login no painel', 'admin.2fa_failed': 'Código 2FA incorreto', 'admin.created': 'Administrador ativado',
   'admin.added': 'Administrador adicionado', 'admin.removed': 'Administrador removido', 'admin.uid_mismatch': 'Tentativa de login com conta trocada', 'admin.uid_rebound': 'Login do administrador revinculado (nova conta Firebase)', 'player.uid_rebound': 'Login do jogador revinculado', '2fa.enabled': '2FA ativado', '2fa.disabled': '2FA desativado',
-  '2fa.recovery_used': 'Código de recuperação usado', '2fa.emergency_reset': '2FA desativado por reset de emergência (servidor)', 'stepup.failed': 'Confirmação de identidade falhou', 'stepup.failed_2fa': 'Confirmação 2FA falhou', 'sessions.revoked': 'Sessões encerradas',
+  '2fa.recovery_used': 'Código de recuperação usado', '2fa.emergency_reset': '2FA desativado por reset de emergência (servidor)', 'admin.device_trusted': 'Aparelho lembrado por 30 dias', 'admin.login_trusted_device': 'Login em aparelho lembrado (sem 2FA)', 'stepup.failed': 'Confirmação de identidade falhou', 'stepup.failed_2fa': 'Confirmação 2FA falhou', 'sessions.revoked': 'Sessões encerradas',
   'payment.mismatch': 'Pagamento com valor/pedido divergente', 'payment.manual_confirm': 'Pagamento confirmado manualmente', 'payment.e2e_reuse': 'Comprovante Pix reutilizado', 'payment.chargeback': 'Contestação (chargeback)',
   'payment.refunded': 'Estorno no provedor', 'payment.verify_requested': 'Consulta de pagamento', 'payment.charge_failed': 'Falha ao gerar cobrança', 'webhook.rejected': 'Webhook com assinatura inválida', 'webhook.unknown_order': 'Webhook de pedido desconhecido',
   'api.bad_key': 'Chave de API inválida', 'api.signature_rejected': 'Assinatura de jogo rejeitada', 'ip.blocked': 'IP bloqueado automaticamente', 'ip.unblocked': 'IP desbloqueado', 'csrf.blocked': 'Requisição de outro site bloqueada',
@@ -1192,6 +1192,9 @@ PAGES.seguranca = async (page) => {
         <div><b>${esc(uaName(x.user_agent))}${x.current ? ' <span class="vbadge provider">esta sessão</span>' : ''}</b><small class="mono">${esc(x.ip || '')} · ativa há ${F.ago(x.last_seen_at)} · desde ${F.dt(x.created_at)}</small></div>
         ${x.current ? '' : `<button class="btn sm ghost icon" data-rev="${x.id}" title="Encerrar">${icon('close', 15)}</button>`}</li>`).join('')}</ul>
         <p class="muted" style="font-size:12px;margin-top:10px">Sessões do painel expiram após ${state.me.idle_minutes} min sem uso e no máximo em 12 h.</p>`)}
+      ${s.trusted_devices.length ? panel('s6', '03b', 'Aparelhos lembrados', 'entram sem o código 2FA (ainda pedem o login)', '', `<ul class="sess">${s.trusted_devices.map(x => `<li><span class="pi">${icon(/mobile|android|iphone/i.test(x.user_agent || '') ? 'phone' : 'monitor', 15)}</span>
+        <div><b>${esc(uaName(x.user_agent))}</b><small class="mono">${esc(x.ip || '')} · lembrado em ${F.dt(x.created_at)} · até ${F.dt(x.expires_at)}</small></div></li>`).join('')}</ul>
+        <p class="muted" style="font-size:12px;margin-top:10px">"Encerrar as outras" (em Sessões) também esquece todos os aparelhos.</p>`) : ''}
       ${panel('s6', '04', 'IPs bloqueados', 'bloqueio automático por abuso', '', s.blocked.length ? `<ul class="sess">${s.blocked.map(b => `<li><span class="pi">${icon('globe', 15)}</span><div><b class="mono">${esc(b.ip)}</b><small>até ${F.dt(b.until)}</small></div><button class="btn sm" data-unb="${esc(b.ip)}">Desbloquear</button></li>`).join('')}</ul>`
         : '<p class="t2" style="font-size:13px">Nenhum IP bloqueado agora. Quem excede repetidamente os limites de requisição é bloqueado por 15 minutos.</p>')}
       ${panel('s12', '05', 'Trilha de auditoria', `${F.int(s.chain.records)} registros · cadeia de hash ${s.chain.ok ? '<span style="color:var(--good-text)">íntegra</span>' : `<b style="color:#f07a7a">QUEBRADA no registro #${s.chain.broken_at}</b>`}`,
@@ -1329,8 +1332,9 @@ async function showAuth(view = 'login', data = {}) {
   } else if (view === 'mfa') {
     box.innerHTML = `<form class="nxl" novalidate><div class="nxl-h"><span class="label">${data.expired ? 'Sessão do painel expirada' : 'Etapa 2 de 2'}</span><h2>Verificação em duas etapas</h2><p>${data.expired ? 'Você ficou um tempo sem usar o painel. ' : ''}Digite o código de 6 dígitos do seu app autenticador, ou um código de recuperação.</p></div>
       <input class="input mono" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="14" style="height:52px;font-size:22px;letter-spacing:.35em;text-align:center">
+      <label class="switch"><input type="checkbox" name="remember" checked> Lembrar este aparelho por 30 dias</label>
       <div class="nxl-msg err" id="mErr"></div><button class="btn primary lg">Verificar</button><a href="#" class="nxl-link" id="back">Usar outra conta</a></form>`;
-    $('form', box).onsubmit = async e => { e.preventDefault(); try { await NXAuth.mfa(data.mfa_token, formData(e.target).code); boot(); } catch (err) { $('#mErr').textContent = err.message; } };
+    $('form', box).onsubmit = async e => { e.preventDefault(); const d = formData(e.target); try { await NXAuth.mfa(data.mfa_token, d.code, d.remember); boot(); } catch (err) { $('#mErr').textContent = err.message; } };
     $('#back').onclick = async e => { e.preventDefault(); await (await NXWhenAuth()).logout(); showAuth(); };
     $('input', box).focus();
   } else {

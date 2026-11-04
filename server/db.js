@@ -191,6 +191,9 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 CREATE INDEX IF NOT EXISTS ix_audit_at ON audit_log(at);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_players_fb ON players(firebase_uid) WHERE firebase_uid IS NOT NULL;
+CREATE TABLE IF NOT EXISTS trusted_devices (
+  token_hash TEXT PRIMARY KEY, admin_id INTEGER NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, ip TEXT, user_agent TEXT
+);
 CREATE INDEX IF NOT EXISTS ix_orders_provider ON orders(provider_payment_id);
 CREATE INDEX IF NOT EXISTS ix_orders_status ON orders(status, created_at);
 CREATE INDEX IF NOT EXISTS ix_orders_player ON orders(player_id, created_at);
