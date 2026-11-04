@@ -236,8 +236,18 @@ async function market() {
 }
 
 // ============================================================ JOGO
+// Link vindo de dentro do jogo: /jogo/<slug>?id=<id do jogador>&sku=<pacote>  → já abre o pagamento
+const fromGame = (() => {
+  const q = new URLSearchParams(location.search);
+  const id = (q.get('id') || '').trim(), sku = (q.get('sku') || '').trim().toUpperCase();
+  return { id: /^[\w.\-:@]{2,80}$/.test(id) ? id : '', sku: /^[A-Z0-9_]{1,48}$/.test(sku) ? sku : '' };
+})();
+const rememberId = (slug, id) => { try { if (id) sessionStorage.setItem('nx_pid_' + slug, id); } catch { } };
+const rememberedId = slug => { try { return sessionStorage.getItem('nx_pid_' + slug) || ''; } catch { return ''; } };
+
 async function gamePage() {
   const slug = decodeURIComponent(location.pathname.split('/')[2] || '');
+  rememberId(slug, fromGame.id);
   let d;
   try { [d] = await Promise.all([api('GET', '/api/public/games/' + encodeURIComponent(slug)), loadMarket()]); }
   catch { return notFound(); }
@@ -286,6 +296,16 @@ async function gamePage() {
   const render = () => { const el = $('#products'); if (!el) return; el.innerHTML = products.filter(p => !filter || p.type === filter).map(p => productCard(p, { best: best.has(p.id) })).join(''); bindAdd(el); };
   $$('#tabs button').forEach(b => b.onclick = () => { filter = b.dataset.t; $$('#tabs button').forEach(x => x.classList.toggle('on', x === b)); render(); });
   render();
+  if (fromGame.sku) {
+    const p = products.find(x => x.sku === fromGame.sku);
+    history.replaceState(null, '', location.pathname + '#loja');
+    if (p) {
+      S.cart[g.slug] = [{ id: p.id, qty: 1 }]; saveCart();
+      $('#loja')?.scrollIntoView();
+      if (fromGame.id) toast('Compra para o jogador ' + fromGame.id);
+      startCheckout(g.slug);
+    } else toast('Esse pacote não está mais à venda', 'err');
+  }
 }
 
 // ============================================================ carrinho e checkout
@@ -347,7 +367,7 @@ function checkout(slug) {
   const g = S.market.games.find(x => x.slug === slug);
   const list = S.cart[slug] || [];
   const total = list.reduce((a, i) => a + productById(i.id).price_cents * i.qty, 0);
-  const linked = S.links.find(l => l.slug === slug);
+  const linked = rememberedId(slug) ? { external_id: rememberedId(slug) } : S.links.find(l => l.slug === slug);
   const ov = overlay(`<form class="dialog" novalidate>
     <div class="dialog-h"><div><span class="label">${esc(g.name)}</span><h3 style="margin-top:4px">Finalizar compra</h3></div><button type="button" class="btn ghost icon sm x" data-x>${icon('close', 16)}</button></div>
     <div class="dialog-b" style="display:flex;flex-direction:column;gap:16px">

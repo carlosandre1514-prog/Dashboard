@@ -8,7 +8,8 @@ import java.net.URLEncoder
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
-// Conector do jogo com o site NEXUS (painel de vendas + loja Pix).
+// Conector genérico Android/Kotlin com o site NEXUS (painel de vendas + loja Pix).
+// Para o Favela Stricker use sdk/favela-stricker/ (chave fica no servidor do jogo).
 // Kotlin puro (HttpURLConnection + org.json), no mesmo estilo do Firebase.kt do jogo. Tudo roda fora da UI thread.
 //
 // O que ele faz:
