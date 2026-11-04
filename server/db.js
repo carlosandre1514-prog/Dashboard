@@ -152,7 +152,7 @@ function addColumns(table, cols) {
 }
 addColumns('admins', [
   ['totp_secret', 'TEXT'], ['totp_enabled', 'INTEGER NOT NULL DEFAULT 0'], ['totp_last', 'INTEGER NOT NULL DEFAULT -1'],
-  ['recovery_codes', 'TEXT'], ['firebase_uid', 'TEXT'], ['role', "TEXT NOT NULL DEFAULT 'admin'"], ['failed_logins', 'INTEGER NOT NULL DEFAULT 0'], ['locked_until', 'TEXT'], ['last_login_at', 'TEXT'], ['last_login_ip', 'TEXT'],
+  ['recovery_codes', 'TEXT'], ['firebase_uid', 'TEXT'], ['role', "TEXT NOT NULL DEFAULT 'admin'"], ['login_provider', 'TEXT'], ['failed_logins', 'INTEGER NOT NULL DEFAULT 0'], ['locked_until', 'TEXT'], ['last_login_at', 'TEXT'], ['last_login_ip', 'TEXT'],
 ]);
 addColumns('players', [['firebase_uid', 'TEXT'], ['email_verified', 'INTEGER NOT NULL DEFAULT 0'], ['display_name', 'TEXT'], ['failed_logins', 'INTEGER NOT NULL DEFAULT 0'], ['locked_until', 'TEXT'], ['signup_ip', 'TEXT'], ['last_ip', 'TEXT'], ['blocked', 'INTEGER NOT NULL DEFAULT 0']]);
 addColumns('games', [['signing_secret', 'TEXT'], ['require_signature', 'INTEGER NOT NULL DEFAULT 0']]);

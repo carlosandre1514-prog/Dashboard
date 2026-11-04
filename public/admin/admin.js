@@ -126,34 +126,47 @@ function confirmDialog(title, text, action = 'Confirmar') {
 // Confirmação forte para ações sensíveis: reautenticação no Firebase (senha ou Google) + 2FA se ativo.
 function stepUpDialog({ title, text, action = 'Confirmar', danger = false, fields = '', run }) {
   const layer = $('#layer');
+  // conta criada pelo Google não tem senha: mostra só o Google (o servidor informa como a pessoa entrou)
+  const google = (window.NXAuth && NXAuth.provider()) ? NXAuth.provider() === 'google.com' : state.me.provider === 'google.com';
+  const totp = state.me.totp_enabled;
   layer.innerHTML = `<div class="overlay"><form class="dialog" style="max-width:480px" novalidate>
     <div class="dialog-h"><span style="color:var(--warning);display:flex">${icon('lock', 18)}</span><h3>${esc(title)}</h3><button type="button" class="btn ghost icon sm x" data-x>${icon('close', 16)}</button></div>
     <div class="dialog-b" style="display:flex;flex-direction:column;gap:14px">
       ${text ? `<p class="t2" style="font-size:13.5px">${esc(text)}</p>` : ''}${fields}
-      <div class="stepup"><span class="label">Confirme sua identidade</span>
-        <label class="field"><span>Senha da conta ${esc(state.me.email)}</span><input class="input" type="password" name="password" autocomplete="current-password"></label>
-        <button type="button" class="btn sm" data-google>${icon('globe', 14)}Entrei com Google — confirmar com Google</button>
-        ${state.me.totp_enabled ? '<label class="field"><span>Código do app autenticador</span><input class="input mono" name="totp" inputmode="numeric" maxlength="6" autocomplete="one-time-code" style="letter-spacing:.25em"></label>' : ''}
+      <div class="stepup"><span class="label">Confirme que é você</span>
+        ${totp ? `<label class="field"><span>${google ? '1. ' : ''}Código de 6 dígitos do app autenticador</span><input class="input mono" name="totp" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="000000" style="letter-spacing:.3em;font-size:18px"><small>Use um código novo — cada código vale uma vez.</small></label>` : ''}
+        ${google
+          ? `<p class="t2" style="font-size:12.5px">${totp ? '2. ' : ''}Sua conta entra pelo Google. Confirme na janela do Google com a conta <b style="color:var(--text)">${esc(state.me.email)}</b>.</p>`
+          : `<label class="field"><span>Senha da conta ${esc(state.me.email)}</span><input class="input" type="password" name="password" autocomplete="current-password"></label>`}
       </div>
-      <div class="nxl-msg err" id="suErr"></div>
+      <div class="nxl-msg err" id="suErr" role="alert"></div>
+      ${google ? '' : '<a href="#" class="nxl-link" id="useG" style="text-align:left;font-size:12.5px">Entrou com Google? Confirmar com Google</a>'}
     </div>
-    <div class="dialog-f"><button type="button" class="btn" data-x>Cancelar</button><button class="btn ${danger ? 'danger' : 'primary'}" type="submit">${esc(action)}</button></div>
+    <div class="dialog-f"><button type="button" class="btn" data-x>Cancelar</button>
+      <button class="btn ${danger ? 'danger' : 'primary'}" type="submit">${google ? icon('globe', 15) + 'Confirmar com Google' : esc(action)}</button></div>
   </form></div>`;
   const form = $('form', layer);
   $$('[data-x]', layer).forEach(b => b.onclick = closeLayer);
+  const err = m => { $('#suErr').textContent = m; };
   const go = async useGoogle => {
     const d = formData(form);
+    if (totp && !/^\d{6}$/.test(d.totp || '')) { err('Digite o código de 6 dígitos que aparece agora no app autenticador.'); $('[name=totp]', form).focus(); return; }
+    if (!useGoogle && !d.password) { err('Digite sua senha.'); return; }
+    err('');
     $$('button', form).forEach(b => b.disabled = true);
     try {
       const A = await NXWhenAuth();
-      if (!useGoogle && !d.password) throw new Error('Digite sua senha ou use o Google');
       const id_token = await A.freshToken(useGoogle ? { useGoogle: true } : { email: state.me.email, password: d.password });
       await run({ id_token, totp: d.totp }, d);
       if ($('form', layer) === form) closeLayer();
-    } catch (e) { $('#suErr').textContent = window.NXAuth ? NXAuth.message(e) : e.message; $$('button', form).forEach(b => b.disabled = false); }
+    } catch (e) {
+      err(window.NXAuth ? NXAuth.message(e) : e.message);
+      $$('button', form).forEach(b => b.disabled = false);
+      const t = $('[name=totp]', form); if (t && /código/i.test(e.message)) { t.value = ''; t.focus(); }
+    }
   };
-  form.onsubmit = e => { e.preventDefault(); go(false); };
-  $('[data-google]', form).onclick = () => go(true);
+  form.onsubmit = e => { e.preventDefault(); go(google); };
+  const ug = $('#useG', form); if (ug) ug.onclick = e => { e.preventDefault(); go(true); };
   setTimeout(() => $('input', form)?.focus(), 30);
 }
 function showSecretOnce(title, secret) {

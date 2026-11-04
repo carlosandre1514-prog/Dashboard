@@ -108,6 +108,7 @@ async function stepUp(req, admin, body) {
     throw new HttpError(403, 'Confirme sua identidade novamente (senha ou Google) para continuar');
   }
   if (admin.totp_enabled) {
+    if (!str(body.totp, 6)) throw new HttpError(403, 'Digite o código de 6 dígitos do app autenticador');
     const c = sec.verifyTotp(sec.decrypt(admin.totp_secret), str(body.totp, 6), admin.totp_last);
     if (c < 0) { audit('admin', admin.id, 'stepup.failed_2fa', { ...ctxOf(req), severity: 'warning' }); throw new HttpError(403, sec.totpError(c)); }
     db.prepare('UPDATE admins SET totp_last = ? WHERE id = ?').run(c, admin.id);
@@ -285,6 +286,7 @@ route('POST', '/api/auth/session', async (req, res, { body }) => {
         throw new HttpError(403, 'Conta de administrador vinculada a outro login. Contate o dono do sistema.');
       } else if (!a.firebase_uid) db.prepare('UPDATE admins SET firebase_uid = ? WHERE id = ?').run(t.uid, a.id);
       lockoutCheck(a);
+      db.prepare('UPDATE admins SET login_provider = ? WHERE id = ?').run(t.provider || null, a.id);
       if (a.totp_enabled) {
         const mt = newToken();
         mfaPending.set(mt, { id: a.id, exp: Date.now() + 5 * 60000, tries: 0 });
@@ -344,7 +346,7 @@ route('GET', '/api/auth/me', async req => {
 });
 route('GET', '/api/admin/me', async req => {
   const a = requireAdmin(req);
-  return { id: a.id, email: a.email, name: a.name, role: a.role, totp_enabled: !!a.totp_enabled, idle_minutes: ADMIN_IDLE_MIN, last_login_at: a.last_login_at, last_login_ip: a.last_login_ip };
+  return { id: a.id, email: a.email, name: a.name, role: a.role, provider: a.login_provider || null, totp_enabled: !!a.totp_enabled, idle_minutes: ADMIN_IDLE_MIN, last_login_at: a.last_login_at, last_login_ip: a.last_login_ip };
 });
 
 // ---------- administradores (somente donos definidos em ADMIN_EMAILS) ----------
