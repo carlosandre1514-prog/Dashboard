@@ -669,7 +669,7 @@ PAGES.produtos = async (page) => {
           <td><div class="cell-main"><span class="pi ${p.type}">${icon(L.typeIcon[p.type], 16)}</span><div><b>${esc(p.name)}${p.featured ? ` <span style="color:var(--warning);display:inline-block;vertical-align:-2px">${icon('star', 12)}</span>` : ''}</b><small>${esc(p.sku)}</small></div></div></td>
           <td class="t2">${esc(p.game_name)}</td><td><span class="tag">${L.type[p.type]}</span></td>
           <td class="r"><b style="font-weight:600">${F.money(p.price_cents)}</b>${p.compare_cents ? `<span class="strike">${F.money(p.compare_cents)}</span>` : ''}</td>
-          <td class="r">${p.coins ? F.int(p.coins) : '<span class="muted">—</span>'}</td>
+          <td class="r">${p.coins ? F.int(p.coins) : '<span class="muted">—</span>'}${coinsMismatch(p) ? `<span class="vbadge review" title="O nome/SKU indica ${F.int(coinsMismatch(p))} moedas" style="margin-left:6px">${icon('alert', 11)}confira</span>` : ''}</td>
           <td class="r">${p.stock == null ? '<span class="muted">∞</span>' : p.stock <= 20 ? `<span style="color:var(--warning)">${F.int(p.stock)}</span>` : F.int(p.stock)}</td>
           <td class="r">${F.int(p.sold)}</td><td class="r">${F.money(p.revenue)}</td>
           <td><label class="switch"><input type="checkbox" data-toggle="${p.id}" ${p.active ? 'checked' : ''} aria-label="À venda"></label></td>
@@ -698,6 +698,12 @@ PAGES.produtos = async (page) => {
     catch (e) { toast(e.message, 'err'); c.checked = !c.checked; }
   });
 };
+// quantidade escrita no nome/SKU maior que o campo Moedas → provável erro de cadastro
+function coinsMismatch(p) {
+  if (p.type !== 'currency') return 0;
+  const hinted = Math.max(0, ...[p.name, p.sku].map(t => (String(t || '').replace(/(\d)\.(\d{3})/g, '$1$2').match(/\d{3,}/g) || []).map(Number)).flat());
+  return hinted && (p.coins || 0) < hinted ? hinted : 0;
+}
 function productForm(p = {}) {
   const reais = c => (c == null || c === '' ? '' : (c / 100).toFixed(2));
   dialog({
@@ -717,6 +723,12 @@ function productForm(p = {}) {
     </div>`,
     onSubmit: async d => {
       if (d.price === '') throw new Error('Informe o preço');
+      // confere se o campo Moedas bate com a quantidade escrita no nome/SKU (ex.: "5.600 moedas" / MOEDAS_5600)
+      const coinsNum = Number(String(d.coins || 0).replace(/\./g, '').replace(',', '.'));
+      const hinted = Math.max(0, ...[d.name, d.sku].map(t => (String(t || '').replace(/(\d)\.(\d{3})/g, '$1$2').match(/\d{3,}/g) || []).map(Number)).flat());
+      if (d.type === 'currency' && hinted && coinsNum < hinted &&
+        !window.confirm(`Atenção: o nome/SKU fala em ${F.int(hinted)} moedas, mas o campo "Moedas entregues" está ${F.int(coinsNum)}.\n\nO jogo credita o valor do CAMPO. Salvar assim mesmo?`)) return false;
+      d.coins = coinsNum;
       const body = { ...d, price_cents: Math.round(Number(d.price) * 100), compare_cents: d.compare ? Math.round(Number(d.compare) * 100) : null, stock: d.stock === '' ? null : d.stock };
       p.id ? await api('PUT', '/api/admin/products/' + p.id, body) : await api('POST', '/api/admin/products', body);
       toast(p.id ? 'Produto atualizado' : 'Produto criado', 'ok'); route();

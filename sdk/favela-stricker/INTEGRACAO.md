@@ -153,3 +153,25 @@ setInterval(() => { if (!document.hidden) receberComprasDoSite(); }, 60000);
 - As moedas ficam na conta do Firebase do jogo, gravadas pelo próprio celular (`usuarios/<uid>`). Isso deixa um
   jogador avançado editar o próprio saldo, se as regras do banco permitirem. O dinheiro real está protegido pelo
   site. Para blindar o saldo, o próximo passo seria o servidor do jogo gravar as moedas, e não o celular.
+
+## 5. Saldo à prova de sobrescrita (recomendado)
+
+Hoje `salvarConta()` grava a conta **inteira** com `PUT usuarios/<uid>`. Se o jogo estiver aberto em dois lugares
+(APK + navegador, ou dois celulares), o aparelho com o saldo antigo pode gravar por cima das moedas recém-creditadas.
+O marcador `pedido:<código>` também se perde, e como o pedido já foi confirmado no site, as moedas somem.
+
+Correção: creditar com **incremento atômico** do Realtime Database e nunca regravar o saldo inteiro.
+
+```js
+// entrega: soma no próprio banco (atômico) e marca o pedido na mesma escrita
+await fb.patch('usuarios/' + fb.uid, {
+  moedas: { '.sv': { increment: moedas } },
+  ['itens/pedido|' + o.code]: true,
+});
+const r = await fb.get('usuarios/' + fb.uid);              // atualiza o saldo local com o valor real
+if (r.ok && r.dado) guardado.set('moedas', r.dado.moedas);
+```
+
+- Gastos na loja do jogo: o mesmo com incremento negativo (`{ '.sv': { increment: -preco } }`).
+- `salvarConta()`: troque `put` por `patch` e **tire `moedas` do objeto** (grava só nome, itens e XP).
+- Antes de creditar, confira no banco (`GET usuarios/<uid>/itens/pedido|<código>`) se o pedido já foi marcado.
